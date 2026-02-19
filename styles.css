@@ -72,6 +72,10 @@ body {
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.95); }
   to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
+@keyframes modalInMobile {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
 @keyframes float {
   0%, 100% { transform: translateY(0px); }
   50% { transform: translateY(-12px); }
@@ -2177,6 +2181,7 @@ body {
 .adm-badge--warn { background: #fef3c7; color: #d97706; font-weight: 600; }
 .adm-badge--pending { background: #fef3c7; color: #92400e; }
 .adm-badge--paid { background: #d1fae5; color: #065f46; }
+.adm-badge--shipped { background: #ede9fe; color: #7c3aed; }
 .adm-badge--delivered { background: #dbeafe; color: #1e40af; }
 .adm-badge--canceled { background: #f1f5f9; color: #64748b; text-decoration: line-through; }
 .adm-orders-filters { display: flex; gap: 8px; align-items: center; }
@@ -2801,6 +2806,7 @@ body {
 }
 .mo-status--pending { background: #fef3c7; color: #b45309; }
 .mo-status--paid { background: #d1fae5; color: #059669; }
+.mo-status--shipped { background: #dbeafe; color: #2563eb; }
 .mo-status--delivered { background: #ede9fe; color: #7c3aed; }
 .mo-status--canceled { background: #fee2e2; color: #dc2626; }
 
@@ -3126,6 +3132,7 @@ body {
     width: 100%; max-width: 100%; max-height: 100vh;
     border-radius: 0; top: 0; left: 0;
     transform: none;
+    animation: modalInMobile 0.3s ease;
   }
   .product-gallery {
     border-radius: 0; aspect-ratio: 4/3; min-height: 250px;
@@ -3220,6 +3227,9 @@ body {
   .auth-modal-content {
     width: 100%; max-width: 100%; max-height: 100vh;
     border-radius: 0; padding: 24px 16px;
+    top: 0; left: 0;
+    transform: none;
+    animation: modalInMobile 0.3s ease;
   }
 }
 

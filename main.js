@@ -1425,20 +1425,87 @@ document.addEventListener('DOMContentLoaded', () => {
     if (totalEl) totalEl.textContent = `R$ ${total.toFixed(2).replace('.', ',')}`;
 
     // Enable/disable checkout button based on items
-    const checkoutBtn = document.getElementById('cart-checkout-whatsapp');
+    const checkoutBtn = document.getElementById('cart-checkout-infinitepay');
     if (checkoutBtn) {
       checkoutBtn.disabled = items.length === 0;
     }
   }
 
-  // ---- CHECKOUT: CREATE ORDER + OPEN WHATSAPP ----
-  async function finalizeCheckoutWhatsApp() {
+  // ---- INFINITEPAY: GERAÇÃO DE LINK VIA SUPABASE EDGE FUNCTION (sem CORS!) ----
+  const INFINITEPAY_PROXY_URL = 'https://xckuilzjkajfzzartqoy.supabase.co/functions/v1/create-infinitepay-link';
+
+  async function createInfinitePayLink(cartItems, total, discount = 0, couponCode = null, orderId = null) {
+    try {
+      // Monta itens no formato exato que a InfinitePay espera (preço em centavos!)
+      const items = cartItems.map(item => ({
+        quantity: item.quantity || 1,
+        price: Math.round((parseFloat(item.price_at_cart) || 0) * 100), // R$ 10.00 → 1000
+        description: item.product_name || "Produto do Toque de Fada"
+      }));
+
+      // Descrição extra para o checkout
+      const fullDescription = cartItems.map(item =>
+        `${item.quantity}x ${item.product_name} - R$ ${(item.price_at_cart * item.quantity).toFixed(2)}`
+      ).join('\n');
+
+      // Identificador único pro pedido
+      const referenceId = orderId ? `toque-${orderId}` : `toque_${Date.now()}`;
+
+      const payload = {
+        handle: "eric-eduardo-p78",
+        items: items,
+        order_nsu: referenceId,
+        description: `Pedido #${orderId || 'TEMP'} - Toque de Fada\n${fullDescription}`,
+        customer: {
+          name: currentUser?.user_metadata?.full_name || "Cliente",
+          email: currentUser?.email || "cliente@toquedefada.com.br"
+        },
+        redirect_url: window.location.origin + `/obrigado.html?order=${orderId || 'temp'}&ref=${referenceId}`
+      };
+
+      // Chama a Edge Function do Supabase como proxy (sem erro de CORS!)
+      const response = await fetch(INFINITEPAY_PROXY_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({ payload })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Erro ${response.status}: Falha ao criar link`);
+      }
+
+      const data = await response.json();
+      const checkoutUrl = data.checkout_url || data.url;
+      if (!checkoutUrl) {
+        console.error('Resposta da InfinitePay:', data);
+        throw new Error('Resposta sem checkout_url/url');
+      }
+
+      return {
+        checkout_url: checkoutUrl,
+        reference_id: referenceId
+      };
+    } catch (err) {
+      console.error('Erro ao gerar link InfinitePay:', err);
+      throw err;
+    }
+  }
+
+  // ---- CHECKOUT: CREATE ORDER + PAGAR COM INFINITEPAY ----
+  async function finalizeCheckoutInfinitePay() {
     const items = window.cartItems || [];
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      showToast('Seu carrinho está vazio');
+      return;
+    }
 
     // Require login before checkout
     if (!currentUser && !(supabase && supabase.getAccessToken())) {
-      showToast('Login necessário', 'Faça login ou crie uma conta para finalizar sua compra.', 'warning');
+      showToast('Faça login para finalizar a compra');
       // Close cart drawer
       const cartDrawer = document.getElementById('cart-drawer');
       if (cartDrawer) cartDrawer.classList.remove('open');
@@ -1450,7 +1517,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const loginForm = document.getElementById('auth-login-form');
         if (authModal) {
           if (authSubtitle) authSubtitle.textContent = 'Entre ou crie sua conta para finalizar a compra';
-          // Show login form
           document.querySelectorAll('#auth-login-form, #auth-register-form, #auth-forgot-form').forEach(f => f.style.display = 'none');
           if (loginForm) loginForm.style.display = '';
           authModal.classList.add('open');
@@ -1460,10 +1526,10 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    const checkoutBtn = document.getElementById('cart-checkout-whatsapp');
+    const checkoutBtn = document.getElementById('cart-checkout-infinitepay');
     if (checkoutBtn) {
       checkoutBtn.disabled = true;
-      checkoutBtn.textContent = 'PROCESSANDO...';
+      checkoutBtn.textContent = 'GERANDO PAGAMENTO...';
     }
 
     try {
@@ -1483,36 +1549,19 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const total = subtotal - discount;
 
-      // Build WhatsApp message
-      let msg = 'Ola! Gostaria de finalizar meu pedido no Toque de Fada.\n\n';
-      msg += '-----------------------------\n';
-      items.forEach((item, idx) => {
-        const name = item.product_name || item.productName || 'Produto';
-        const price = parseFloat(item.price_at_cart) || 0;
-        const qty = item.quantity || 1;
-        msg += `${idx + 1}. *${name}*\n   Qtd: ${qty} | Valor: R$ ${(price * qty).toFixed(2).replace('.', ',')}\n`;
-      });
-      msg += '-----------------------------\n';
-      if (appliedCoupon) {
-        msg += `Cupom aplicado: *${appliedCoupon.code}*\n`;
-        msg += `Desconto: -R$ ${discount.toFixed(2).replace('.', ',')}\n`;
-      }
-      msg += `\n*Total: R$ ${total.toFixed(2).replace('.', ',')}*`;
-
       // Get user info
       const user = JSON.parse(localStorage.getItem('toque_user') || 'null');
       const sessionId = localStorage.getItem('toque_session_id') || 'unknown';
 
-      // Create order in database
+      // Create order in Supabase
       const order = await supabase.createOrder({
         session_id: sessionId,
         user_email: user ? user.email : null,
-        customer_name: user ? (user.user_metadata?.name || user.email) : null,
-        status: 'pending',
+        customer_name: user ? (user.user_metadata?.full_name || user.user_metadata?.name || user.email) : null,
+        status: 'pending_payment',
         total_price: total,
         discount: discount,
-        coupon_code: appliedCoupon ? appliedCoupon.code : null,
-        whatsapp_message: msg
+        coupon_code: appliedCoupon ? appliedCoupon.code : null
       });
 
       const orderId = order.id;
@@ -1527,15 +1576,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }));
       await supabase.createOrderItems(orderItems);
 
-      // Add order ID to WhatsApp message
-      msg = `*Pedido #${orderId}*\n\n` + msg;
-      msg += '\n\nAguardo confirmacao. Obrigada!';
+      // Generate InfinitePay payment link
+      const { checkout_url } = await createInfinitePayLink(items, total, discount, appliedCoupon?.code, orderId);
 
-      // Open WhatsApp
-      const whatsappUrl = `https://wa.me/${window._whatsappNumber || '5511999999999'}?text=${encodeURIComponent(msg)}`;
-      window.open(whatsappUrl, '_blank');
-
-      // Clear cart
+      // Clear cart before redirecting
       window.cartItems = [];
       appliedCoupon = null;
       saveCartToLocalStorage();
@@ -1543,22 +1587,26 @@ document.addEventListener('DOMContentLoaded', () => {
       renderCartDrawer();
       closeCartDrawer();
 
-      // Show success message
-      showToast('Pedido #' + orderId + ' criado! Finalize pelo WhatsApp.');
+      showToast('Redirecionando para pagamento seguro...');
+
+      // Redirect to InfinitePay checkout
+      setTimeout(() => {
+        window.location.href = checkout_url;
+      }, 500);
 
     } catch (err) {
-      console.error('Erro ao criar pedido:', err);
-      showToast('Erro ao criar pedido. Tente novamente.');
+      console.error('Erro no checkout InfinitePay:', err);
+      showToast('Erro ao gerar link de pagamento. Tente novamente.');
     } finally {
       if (checkoutBtn) {
         checkoutBtn.disabled = false;
-        checkoutBtn.innerHTML = 'FINALIZAR VIA WHATSAPP <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/></svg>';
+        checkoutBtn.innerHTML = 'PAGAR <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>';
       }
     }
   }
 
   // Attach checkout click handler
-  document.getElementById('cart-checkout-whatsapp')?.addEventListener('click', finalizeCheckoutWhatsApp);
+  document.getElementById('cart-checkout-infinitepay')?.addEventListener('click', finalizeCheckoutInfinitePay);
 
   function changeCartQty(index, delta) {
     if (!window.cartItems || !window.cartItems[index]) return;
@@ -2340,9 +2388,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function myOrdersStatusInfo(status) {
     const map = {
-      'pending': { label: 'Pendente', cls: 'mo-status--pending', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', desc: 'Aguardando confirmacao de pagamento' },
-      'paid': { label: 'Pago', cls: 'mo-status--paid', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', desc: 'Pagamento confirmado - em preparacao' },
-      'delivered': { label: 'Concluído', cls: 'mo-status--delivered', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>', desc: 'Pedido concluido' },
+      'pending_payment': { label: 'Aguardando Pagamento', cls: 'mo-status--pending', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', desc: 'Aguardando confirma\u00e7\u00e3o de pagamento' },
+      'pending': { label: 'Aguardando Pagamento', cls: 'mo-status--pending', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', desc: 'Aguardando confirma\u00e7\u00e3o de pagamento' },
+      'paid': { label: 'Pagamento Confirmado', cls: 'mo-status--paid', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', desc: 'Pagamento confirmado - pedido em prepara\u00e7\u00e3o' },
+      'shipped': { label: 'Pedido Enviado', cls: 'mo-status--shipped', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/></svg>', desc: 'Seu pedido foi enviado e est\u00e1 a caminho!' },
+      'delivered': { label: 'Entregue', cls: 'mo-status--delivered', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>', desc: 'Pedido entregue' },
       'canceled': { label: 'Cancelado', cls: 'mo-status--canceled', icon: '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', desc: 'Pedido cancelado' }
     };
     return map[status] || { label: status, cls: '', icon: '', desc: '' };
@@ -2406,27 +2456,32 @@ document.addEventListener('DOMContentLoaded', () => {
         const dateStr = formatMyOrderDate(order.created_at);
 
         let trackingHtml = '';
-        if (order.status === 'delivered' || order.status === 'paid') {
+        if (order.status === 'shipped' || order.status === 'delivered') {
           if (tracking) {
             trackingHtml = `<div class="mo-tracking mo-tracking--available">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-              <div><strong>Codigo de Rastreio</strong><span class="mo-tracking-code">${tracking}</span></div>
+              <div><strong>C\u00f3digo de Rastreio</strong><span class="mo-tracking-code">${tracking}</span></div>
             </div>`;
           } else if (noTracking) {
             trackingHtml = `<div class="mo-tracking mo-tracking--pickup">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-              <div><strong>Retirada / Entrega local</strong><span>Sem codigo de rastreio</span></div>
+              <div><strong>Retirada / Entrega local</strong><span>Sem c\u00f3digo de rastreio</span></div>
             </div>`;
           } else {
-            trackingHtml = `<div class="mo-tracking mo-tracking--waiting">
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-              <div><strong>Rastreio</strong><span>Ainda nao disponivel</span></div>
+            trackingHtml = `<div class="mo-tracking mo-tracking--available">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/></svg>
+              <div><strong>Em Tr\u00e2nsito</strong><span>Seu pedido est\u00e1 a caminho!</span></div>
             </div>`;
           }
-        } else if (order.status === 'pending') {
+        } else if (order.status === 'paid') {
+          trackingHtml = `<div class="mo-tracking mo-tracking--waiting">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/></svg>
+            <div><strong>Em Prepara\u00e7\u00e3o</strong><span>Seu pedido est\u00e1 sendo preparado para envio</span></div>
+          </div>`;
+        } else if (order.status === 'pending_payment' || order.status === 'pending') {
           trackingHtml = `<div class="mo-tracking mo-tracking--waiting">
             <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <div><strong>Rastreio</strong><span>Disponivel apos confirmacao</span></div>
+            <div><strong>Rastreio</strong><span>Dispon\u00edvel ap\u00f3s confirma\u00e7\u00e3o do pagamento</span></div>
           </div>`;
         }
 
@@ -3367,11 +3422,18 @@ document.addEventListener('DOMContentLoaded', () => {
       return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     }
 
+    // Check if order needs admin action (pending payment or paid awaiting shipment)
+    function admNeedsAction(status) {
+      return status === 'pending_payment' || status === 'pending' || status === 'paid';
+    }
+
     function admOrderStatusBadge(status) {
       const map = {
-        'pending': ['Pendente', 'adm-badge--pending'],
-        'paid': ['Pago', 'adm-badge--paid'],
-        'delivered': ['Entregue', 'adm-badge--delivered'],
+        'pending_payment': ['Pagamento Pendente', 'adm-badge--pending'],
+        'pending': ['Pagamento Pendente', 'adm-badge--pending'],
+        'paid': ['Pago - Aguardando Envio', 'adm-badge--paid'],
+        'shipped': ['Enviado \u2708', 'adm-badge--shipped'],
+        'delivered': ['Entregue \u2713', 'adm-badge--delivered'],
         'canceled': ['Cancelado', 'adm-badge--canceled']
       };
       const [label, cls] = map[status] || [status, ''];
@@ -3384,7 +3446,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!tbody) return;
 
       const filter = document.getElementById('adm-orders-filter')?.value || 'all';
-      const filtered = filter === 'all' ? admOrders : admOrders.filter(o => o.status === filter);
+      let filtered;
+      if (filter === 'all') {
+        filtered = admOrders;
+      } else if (filter === 'action_needed') {
+        filtered = admOrders.filter(o => admNeedsAction(o.status));
+      } else {
+        filtered = admOrders.filter(o => o.status === filter);
+      }
+      const countEl = document.getElementById('adm-orders-count');
+      if (countEl) countEl.textContent = `(${filtered.length} pedido${filtered.length !== 1 ? 's' : ''})`;
 
       if (!filtered.length) {
         tbody.innerHTML = '';
@@ -3393,23 +3464,49 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (empty) empty.style.display = 'none';
 
+      // Load item counts async
+      admLoadOrderItemCounts(filtered);
+
       tbody.innerHTML = filtered.map(o => {
         const total = parseFloat(o.total_price) || 0;
         const customerName = o.customer_name || o.user_email || 'Visitante';
-        return `<tr style="${o.status === 'canceled' ? 'opacity:0.5;' : ''}">
-          <td><strong>#${o.id}</strong></td>
+        const st = o.status;
+        const isPending = st === 'pending_payment' || st === 'pending';
+        const isPaid = st === 'paid';
+        const isShipped = st === 'shipped';
+        return `<tr style="${st === 'canceled' ? 'opacity:0.5;' : ''}">
+          <td><strong>#${String(o.id).slice(0, 8).toUpperCase()}</strong></td>
           <td><small>${admFormatDate(o.created_at)}</small></td>
           <td><small>${customerName}</small></td>
-          <td><small>${o.whatsapp_message ? o.whatsapp_message.split('\n').filter(l => /^\d+\.\s\*/.test(l.trim())).length + ' item(ns)' : '\u2014'}</small></td>
+          <td><small class="adm-order-items-count" data-order-id="${o.id}">...</small></td>
           <td><strong>${admFormatPrice(total)}</strong></td>
-          <td>${admOrderStatusBadge(o.status)}</td>
+          <td>${admOrderStatusBadge(st)}</td>
           <td><div class="adm-cell-actions">
             <button class="adm-btn-sm adm-btn-edit" data-adm-view-order="${o.id}">Detalhes</button>
-            ${o.status === 'pending' ? `<button class="adm-btn-sm adm-btn-confirm" style="background:#059669;color:#fff;" data-adm-confirm-order="${o.id}">Confirmar</button>` : ''}
-            ${o.status === 'pending' ? `<button class="adm-btn-sm adm-btn-delete" data-adm-cancel-order="${o.id}">Cancelar</button>` : ''}
+            ${isPending ? `<button class="adm-btn-sm" style="background:#059669;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.75rem;" data-adm-confirm-order="${o.id}">\u2713 Confirmar Pgto</button>` : ''}
+            ${isPending ? `<button class="adm-btn-sm adm-btn-delete" data-adm-cancel-order="${o.id}">Cancelar</button>` : ''}
+            ${isPaid ? `<button class="adm-btn-sm" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.75rem;" data-adm-deliver-order="${o.id}">\ud83d\udce6 Enviar</button>` : ''}
+            ${isShipped ? `<span style="color:#7c3aed;font-size:0.75rem;font-weight:600;">\u2708 Enviado${o.tracking_code ? ' - ' + o.tracking_code : ''}</span>` : ''}
           </div></td>
         </tr>`;
       }).join('');
+    }
+
+    // Load item counts for each order in the table
+    async function admLoadOrderItemCounts(orders) {
+      for (const o of orders) {
+        try {
+          const items = await supabase.getOrderItems(o.id);
+          const cell = document.querySelector(`.adm-order-items-count[data-order-id="${o.id}"]`);
+          if (cell) {
+            const count = items ? items.reduce((sum, i) => sum + (i.quantity || 1), 0) : 0;
+            cell.textContent = count > 0 ? `${count} item${count !== 1 ? 's' : ''}` : '\u2014';
+          }
+        } catch(e) {
+          const cell = document.querySelector(`.adm-order-items-count[data-order-id="${o.id}"]`);
+          if (cell) cell.textContent = '\u2014';
+        }
+      }
     }
 
     // Order filter
@@ -3420,27 +3517,46 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('adm-orders-tbody')?.addEventListener('click', async (e) => {
       const viewBtn = e.target.closest('[data-adm-view-order]');
       if (viewBtn) {
-        const orderId = parseInt(viewBtn.dataset.admViewOrder);
+        const orderId = viewBtn.dataset.admViewOrder;
         await admShowOrderDetail(orderId);
         return;
       }
       const confirmBtn = e.target.closest('[data-adm-confirm-order]');
       if (confirmBtn) {
-        const orderId = parseInt(confirmBtn.dataset.admConfirmOrder);
-        admOpenTrackingModal(orderId);
+        const orderId = confirmBtn.dataset.admConfirmOrder;
+        if (!confirm('Confirmar pagamento deste pedido?')) return;
+        await admConfirmPayment(orderId);
         return;
       }
       const cancelBtn = e.target.closest('[data-adm-cancel-order]');
       if (cancelBtn) {
-        const orderId = parseInt(cancelBtn.dataset.admCancelOrder);
+        const orderId = cancelBtn.dataset.admCancelOrder;
         if (!confirm('Cancelar este pedido?')) return;
         await admCancelOrder(orderId);
         return;
       }
+      const deliverBtn = e.target.closest('[data-adm-deliver-order]');
+      if (deliverBtn) {
+        const orderId = deliverBtn.dataset.admDeliverOrder;
+        admOpenTrackingModal(orderId);
+        return;
+      }
     });
 
+    // Confirm payment (set status to 'paid')
+    async function admConfirmPayment(orderId) {
+      try {
+        await supabase.updateOrder(orderId, { status: 'paid' });
+        await admLoadOrders();
+        admNotify('Pagamento confirmado com sucesso!');
+      } catch (err) {
+        console.error('Error confirming payment:', err);
+        admNotify('Erro ao confirmar pagamento: ' + (err.message || ''), 'error');
+      }
+    }
+
     async function admShowOrderDetail(orderId) {
-      const order = admOrders.find(o => o.id === orderId);
+      const order = admOrders.find(o => String(o.id) === String(orderId));
       if (!order) return;
 
       // Load order items
@@ -3456,7 +3572,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const actions = document.getElementById('adm-order-detail-actions');
       const title = document.getElementById('adm-order-modal-title');
 
-      title.textContent = `Pedido #${order.id}`;
+      title.textContent = `Pedido #${String(order.id).slice(0, 8).toUpperCase()}`;
 
       const total = parseFloat(order.total_price) || 0;
       const discount = parseFloat(order.discount) || 0;
@@ -3499,10 +3615,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Actions based on status
       let actionsHtml = '<button type="button" class="adm-btn-cancel" data-close-modal="adm-order-modal">Fechar</button>';
-      if (order.status === 'pending') {
+      const orderSt = order.status;
+      if (orderSt === 'pending_payment' || orderSt === 'pending') {
         actionsHtml = `
           <button type="button" class="adm-btn-cancel-order" id="adm-order-cancel-btn" data-order-id="${order.id}">Cancelar Pedido</button>
-          <button type="button" class="adm-btn-confirm" id="adm-order-confirm-btn" data-order-id="${order.id}">Confirmar Pagamento</button>
+          <button type="button" class="adm-btn-confirm" id="adm-order-confirm-btn" data-order-id="${order.id}">\u2713 Confirmar Pagamento</button>
+          <button type="button" class="adm-btn-cancel" data-close-modal="adm-order-modal">Fechar</button>
+        `;
+      } else if (orderSt === 'paid') {
+        actionsHtml = `
+          <button type="button" class="adm-btn-confirm" id="adm-order-deliver-btn" data-order-id="${order.id}" style="background:#2563eb;">\ud83d\udce6 Enviar Pedido</button>
           <button type="button" class="adm-btn-cancel" data-close-modal="adm-order-modal">Fechar</button>
         `;
       }
@@ -3511,9 +3633,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // Attach modal action listeners
       const confirmModalBtn = document.getElementById('adm-order-confirm-btn');
       if (confirmModalBtn) {
-        confirmModalBtn.addEventListener('click', () => {
+        confirmModalBtn.addEventListener('click', async () => {
+          if (!confirm('Confirmar pagamento deste pedido?')) return;
           modal.classList.remove('open');
-          admOpenTrackingModal(parseInt(confirmModalBtn.dataset.orderId));
+          await admConfirmPayment(confirmModalBtn.dataset.orderId);
         });
       }
       const cancelModalBtn = document.getElementById('adm-order-cancel-btn');
@@ -3521,7 +3644,14 @@ document.addEventListener('DOMContentLoaded', () => {
         cancelModalBtn.addEventListener('click', async () => {
           if (!confirm('Cancelar este pedido?')) return;
           modal.classList.remove('open');
-          await admCancelOrder(parseInt(cancelModalBtn.dataset.orderId));
+          await admCancelOrder(cancelModalBtn.dataset.orderId);
+        });
+      }
+      const deliverModalBtn = document.getElementById('adm-order-deliver-btn');
+      if (deliverModalBtn) {
+        deliverModalBtn.addEventListener('click', () => {
+          modal.classList.remove('open');
+          admOpenTrackingModal(deliverModalBtn.dataset.orderId);
         });
       }
       modal.classList.add('open');
@@ -3557,7 +3687,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('adm-tracking-form')?.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const orderId = parseInt(document.getElementById('adm-tracking-order-id').value);
+      const orderId = document.getElementById('adm-tracking-order-id').value;
       const trackingCode = document.getElementById('adm-tracking-code').value.trim();
       const noTracking = document.getElementById('adm-tracking-none').checked;
 
@@ -3567,8 +3697,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       try {
-        // 1. Update order with tracking + status delivered
-        const updateData = { status: 'delivered' };
+        // 1. Update order with tracking + status shipped (enviado)
+        const updateData = { status: 'shipped' };
         if (noTracking) {
           updateData.no_tracking = true;
           updateData.tracking_code = null;
@@ -3605,7 +3735,7 @@ document.addEventListener('DOMContentLoaded', () => {
         await admLoadProducts();
         admRenderProducts();
         admRefreshSite();
-        admNotify('Pagamento confirmado! ' + (noTracking ? 'Sem rastreio.' : 'Rastreio: ' + trackingCode));
+        admNotify('Pedido enviado! ' + (noTracking ? 'Sem rastreio.' : 'Rastreio: ' + trackingCode));
       } catch (err) {
         console.error('Error confirming payment:', err);
         admNotify('Erro: ' + (err.message || ''), 'error');
