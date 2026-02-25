@@ -6,22 +6,22 @@
   <title>Pedido Confirmado | Toque de Fada</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Quicksand:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --rosa-suave: #FFB6C1;
-      --rosa-claro: #FFF0F3;
-      --rose-gold: #B76E79;
-      --rose-gold-light: #D4979F;
-      --texto-dark: #1A1A2E;
-      --texto-medium: #4A4A5A;
-      --texto-light: #7A7A8A;
-      --dourado: #C9A84C;
+      --champagne: #C4879A;
+      --champagne-dark: #B06B7E;
+      --cream: #F9F0F0;
+      --cream-light: #FDF9F8;
+      --texto-dark: #3B2218;
+      --texto-medium: #5E4438;
+      --texto-light: #9A857B;
+      --borda: #F0E4DE;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Quicksand', sans-serif;
-      background: linear-gradient(135deg, #FFF5F7 0%, #FFF0F3 30%, #FFEEF2 60%, #FFF8FA 100%);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: #FDF9F8;
       color: var(--texto-medium);
       min-height: 100vh;
       display: flex;
@@ -31,22 +31,23 @@
     }
     .card {
       background: #fff;
-      border-radius: 24px;
-      box-shadow: 0 20px 60px rgba(183,110,121,0.12);
+      border-radius: 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.06);
       max-width: 560px;
       width: 100%;
       padding: 48px 40px;
       text-align: center;
       animation: fadeUp 0.6s ease-out;
+      border: 1px solid #F0E8EB;
     }
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(30px); }
       to { opacity: 1; transform: translateY(0); }
     }
     .check-circle {
-      width: 80px; height: 80px;
+      width: 76px; height: 76px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+      background: linear-gradient(135deg, #E8C5D0, #D9C08E);
       display: flex; align-items: center; justify-content: center;
       margin: 0 auto 24px;
       animation: popIn 0.5s 0.3s ease-out both;
@@ -55,16 +56,16 @@
       from { transform: scale(0); }
       to { transform: scale(1); }
     }
-    .check-circle svg { width: 40px; height: 40px; color: #059669; }
+    .check-circle svg { width: 36px; height: 36px; color: white; }
     h1 {
-      font-family: 'Cormorant Garamond', serif;
+      font-family: 'Playfair Display', serif;
       font-size: 2rem;
       color: var(--texto-dark);
       margin-bottom: 8px;
     }
     .subtitle { color: var(--texto-light); font-size: 1rem; margin-bottom: 32px; }
     .order-box {
-      background: var(--rosa-claro);
+      background: var(--cream);
       border-radius: 16px;
       padding: 24px;
       margin-bottom: 24px;
@@ -113,17 +114,17 @@
       display: flex;
       justify-content: space-between;
       padding: 8px 0;
-      border-bottom: 1px solid #f0e4e8;
+      border-bottom: 1px solid var(--borda);
       font-size: 0.9rem;
     }
     .item-row:last-child { border-bottom: none; }
     .item-name { color: var(--texto-dark); font-weight: 600; }
-    .item-price { color: var(--rose-gold); font-weight: 700; }
+    .item-price { color: var(--texto-dark); font-weight: 700; }
     .btn {
       display: inline-flex; align-items: center; gap: 8px;
       padding: 14px 32px;
       border-radius: 12px;
-      font-family: 'Quicksand', sans-serif;
+      font-family: 'Plus Jakarta Sans', sans-serif;
       font-weight: 700;
       font-size: 0.9rem;
       text-decoration: none;
@@ -131,16 +132,16 @@
       border: none; cursor: pointer;
     }
     .btn-primary {
-      background: linear-gradient(135deg, var(--rose-gold), var(--rose-gold-light));
+      background: var(--champagne);
       color: #fff;
     }
-    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(183,110,121,0.3); }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(196,135,154,0.2); }
     .btn-outline {
       background: transparent;
-      border: 2px solid var(--rose-gold-light);
-      color: var(--rose-gold);
+      border: 2px solid var(--borda);
+      color: var(--texto-dark);
     }
-    .btn-outline:hover { background: var(--rosa-claro); }
+    .btn-outline:hover { background: var(--cream); }
     .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
     .whatsapp-link {
       margin-top: 20px;
@@ -151,8 +152,8 @@
     .loading { color: var(--texto-light); }
     .loading .spinner {
       width: 32px; height: 32px;
-      border: 3px solid #f0e4e8;
-      border-top-color: var(--rose-gold);
+      border: 3px solid var(--borda);
+      border-top-color: var(--champagne);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
       margin: 0 auto 16px;

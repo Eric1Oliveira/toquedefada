@@ -5,43 +5,6 @@
 document.addEventListener('DOMContentLoaded', () => {
 
   // ============================================
-  // CONFIG (for elementSdk compatibility)
-  // ============================================
-  const defaultConfig = {
-    hero_title: 'Desperte sua magia interna',
-    hero_subtitle: 'Joias em prata 925 e produtos de beleza que revelam o brilho que existe em você. Cada peça é única, assim como você.',
-    promo_text: 'Frete grátis acima de R$199 • Parcele em até 6x sem juros'
-  };
-
-  let config = { ...defaultConfig };
-
-  async function onConfigChange(cfg) {
-    config = { ...defaultConfig, ...cfg };
-    const heroTitle = document.getElementById('hero-title');
-    if (heroTitle) heroTitle.textContent = config.hero_title;
-    const heroSubtitle = document.getElementById('hero-subtitle');
-    if (heroSubtitle) heroSubtitle.textContent = config.hero_subtitle;
-    const promoText = document.getElementById('promo-text');
-    if (promoText) promoText.textContent = config.promo_text;
-  }
-
-  function mapToCapabilities() {
-    return { recolorables: [], borderables: [], fontEditable: undefined, fontSizeable: undefined };
-  }
-
-  function mapToEditPanelValues(cfg) {
-    return new Map([
-      ['hero_title', cfg.hero_title || defaultConfig.hero_title],
-      ['hero_subtitle', cfg.hero_subtitle || defaultConfig.hero_subtitle],
-      ['promo_text', cfg.promo_text || defaultConfig.promo_text]
-    ]);
-  }
-
-  if (window.elementSdk) {
-    window.elementSdk.init({ defaultConfig, onConfigChange, mapToCapabilities, mapToEditPanelValues });
-  }
-
-  // ============================================
   // PRODUCT DATABASE (defaults — overridden by Supabase)
   // ============================================
   const DEFAULT_PRODUCTS = {
@@ -484,39 +447,218 @@ document.addEventListener('DOMContentLoaded', () => {
     const oneSetWidth = totalWidth / repeatCount;
     offersOffset = 0;
 
-    function step() {
-      if (!offersScrollPaused) {
-        offersOffset += 0.8;
-        if (offersOffset >= oneSetWidth) offersOffset -= oneSetWidth;
+    // --- Ultra-smooth physics engine ---
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartOffset = 0;
+    let currentVelocity = 0;        // px per frame (~16ms)
+    let targetAutoSpeed = 0.5;       // gentle auto-scroll speed
+    let hasDragMoved = false;
+
+    // Track last N touch/mouse points for weighted velocity
+    const dragHistory = [];          // {x, t} entries
+    const HISTORY_MAX = 6;
+
+    // Momentum physics constants
+    const FRICTION = 0.965;          // per-frame friction (closer to 1 = longer glide)
+    const MIN_VELOCITY = 0.08;       // stop threshold
+    const AUTO_EASE_RATE = 0.015;    // how fast auto-scroll resumes (smooth blend)
+
+    let resumeAutoTimeout = null;
+    let isCoasting = false;          // momentum phase after release
+
+    function wrapOffset() {
+      while (offersOffset < 0) offersOffset += oneSetWidth;
+      while (offersOffset >= oneSetWidth) offersOffset -= oneSetWidth;
+    }
+
+    // Compute velocity from drag history using weighted average
+    function computeReleaseVelocity() {
+      if (dragHistory.length < 2) return 0;
+      // Use only recent entries (last ~80ms)
+      const now = dragHistory[dragHistory.length - 1].t;
+      const recent = dragHistory.filter(p => now - p.t < 80);
+      if (recent.length < 2) {
+        // fallback: use last two points
+        const a = dragHistory[dragHistory.length - 2];
+        const b = dragHistory[dragHistory.length - 1];
+        const dt = b.t - a.t;
+        return dt > 0 ? (a.x - b.x) / dt * 16 : 0; // convert to px/frame
       }
-      track.style.transform = `translateX(-${offersOffset}px)`;
+      const first = recent[0];
+      const last = recent[recent.length - 1];
+      const dt = last.t - first.t;
+      if (dt <= 0) return 0;
+      return (first.x - last.x) / dt * 16; // px per frame
+    }
+
+    // Main render loop — always running, silky smooth
+    let lastFrameTime = 0;
+    function step(timestamp) {
+      if (!lastFrameTime) lastFrameTime = timestamp;
+      const elapsed = timestamp - lastFrameTime;
+      lastFrameTime = timestamp;
+      // Normalize to ~16ms frames for consistent physics
+      const timeFactor = Math.min(elapsed / 16, 3);
+
+      if (!isDragging) {
+        if (isCoasting) {
+          // Momentum deceleration with exponential friction
+          currentVelocity *= Math.pow(FRICTION, timeFactor);
+          offersOffset += currentVelocity * timeFactor;
+          wrapOffset();
+          if (Math.abs(currentVelocity) < MIN_VELOCITY) {
+            isCoasting = false;
+            currentVelocity = 0;
+          }
+        } else if (!offersScrollPaused) {
+          // Smoothly ease back to auto-scroll speed
+          currentVelocity += (targetAutoSpeed - currentVelocity) * AUTO_EASE_RATE * timeFactor;
+          offersOffset += currentVelocity * timeFactor;
+          wrapOffset();
+        }
+      }
+      // During drag, offset is set directly by onDragMove, no extra movement
+
+      track.style.transform = `translate3d(-${offersOffset}px, 0, 0)`;
       offersAnimFrame = requestAnimationFrame(step);
     }
     offersAnimFrame = requestAnimationFrame(step);
 
-    track.addEventListener('mouseenter', () => { offersScrollPaused = true; });
-    track.addEventListener('mouseleave', () => { offersScrollPaused = false; });
-    track.addEventListener('touchstart', () => { offersScrollPaused = true; }, { passive: true });
-    track.addEventListener('touchend', () => { setTimeout(() => { offersScrollPaused = false; }, 2000); });
+    // --- Drag handlers ---
+    function onDragStart(clientX) {
+      isDragging = true;
+      isCoasting = false;
+      offersScrollPaused = true;
+      currentVelocity = 0;
+      hasDragMoved = false;
+      dragStartX = clientX;
+      dragStartOffset = offersOffset;
+      dragHistory.length = 0;
+      dragHistory.push({ x: clientX, t: performance.now() });
+      if (resumeAutoTimeout) { clearTimeout(resumeAutoTimeout); resumeAutoTimeout = null; }
+      track.style.cursor = 'grabbing';
+    }
+
+    function onDragMove(clientX) {
+      if (!isDragging) return;
+      hasDragMoved = true;
+      // Record history
+      dragHistory.push({ x: clientX, t: performance.now() });
+      if (dragHistory.length > HISTORY_MAX) dragHistory.shift();
+
+      const diff = dragStartX - clientX;
+      offersOffset = dragStartOffset + diff;
+      wrapOffset();
+    }
+
+    function onDragEnd() {
+      if (!isDragging) return;
+      isDragging = false;
+      track.style.cursor = '';
+
+      // Calculate release velocity from history
+      const releaseVel = computeReleaseVelocity();
+      if (Math.abs(releaseVel) > MIN_VELOCITY) {
+        currentVelocity = releaseVel;
+        isCoasting = true;
+      }
+
+      // Resume auto-scroll smoothly after delay
+      resumeAutoTimeout = setTimeout(() => {
+        offersScrollPaused = false;
+        isCoasting = false;
+        // currentVelocity will ease toward targetAutoSpeed via AUTO_EASE_RATE
+        resumeAutoTimeout = null;
+      }, 3000);
+    }
+
+    // Mouse events (desktop drag)
+    track.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      onDragStart(e.clientX);
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (isDragging) { e.preventDefault(); onDragMove(e.clientX); }
+    });
+    window.addEventListener('mouseup', () => { if (isDragging) onDragEnd(); });
+
+    // Touch events (mobile swipe)
+    track.addEventListener('touchstart', (e) => {
+      onDragStart(e.touches[0].clientX);
+    }, { passive: true });
+    track.addEventListener('touchmove', (e) => {
+      onDragMove(e.touches[0].clientX);
+    }, { passive: true });
+    track.addEventListener('touchend', () => { onDragEnd(); });
+    track.addEventListener('touchcancel', () => { onDragEnd(); });
+
+    // Pause on hover (desktop, no drag)
+    track.addEventListener('mouseenter', () => {
+      if (!isDragging && !isCoasting) {
+        offersScrollPaused = true;
+      }
+    });
+    track.addEventListener('mouseleave', () => {
+      if (!isDragging) {
+        offersScrollPaused = false;
+      }
+    });
+
+    // Prevent accidental clicks after drag/swipe
+    track.addEventListener('click', (e) => {
+      if (hasDragMoved && Math.abs(computeReleaseVelocity()) > 0.3) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    }, true);
   }
 
-  // Offers carousel nav buttons
+  // Offers carousel nav buttons — smooth animated jump
   document.getElementById('offers-carousel-prev')?.addEventListener('click', () => {
     const track = document.getElementById('offers-carousel-track');
     if (!track) return;
     const repeatCount = parseInt(track.dataset.repeatCount) || 3;
     const oneSetWidth = track.scrollWidth / repeatCount;
-    offersOffset -= 350;
-    if (offersOffset < 0) offersOffset += oneSetWidth;
+    // Smooth animated scroll left by ~350px
+    const target = offersOffset - 350;
+    smoothScrollOffers(target < 0 ? target + oneSetWidth : target, oneSetWidth);
   });
   document.getElementById('offers-carousel-next')?.addEventListener('click', () => {
     const track = document.getElementById('offers-carousel-track');
     if (!track) return;
     const repeatCount = parseInt(track.dataset.repeatCount) || 3;
     const oneSetWidth = track.scrollWidth / repeatCount;
-    offersOffset += 350;
-    if (offersOffset >= oneSetWidth) offersOffset -= oneSetWidth;
+    const target = offersOffset + 350;
+    smoothScrollOffers(target >= oneSetWidth ? target - oneSetWidth : target, oneSetWidth);
   });
+
+  // Animated eased scroll for nav buttons
+  function smoothScrollOffers(targetOffset, oneSetWidth) {
+    offersScrollPaused = true;
+    const start = offersOffset;
+    let diff = targetOffset - start;
+    // choose shortest path (wrap-aware)
+    if (Math.abs(diff) > oneSetWidth / 2) {
+      diff = diff > 0 ? diff - oneSetWidth : diff + oneSetWidth;
+    }
+    const duration = 400;
+    const startTime = performance.now();
+    function ease(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; } // cubic ease in-out
+    function animate(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      offersOffset = start + diff * ease(progress);
+      while (offersOffset < 0) offersOffset += oneSetWidth;
+      while (offersOffset >= oneSetWidth) offersOffset -= oneSetWidth;
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        setTimeout(() => { offersScrollPaused = false; }, 1500);
+      }
+    }
+    requestAnimationFrame(animate);
+  }
 
   // Event delegation for product grid
   function setupProductGridEvents() {
@@ -646,6 +788,162 @@ document.addEventListener('DOMContentLoaded', () => {
       if (heroPlaceholder) heroPlaceholder.style.display = '';
     }
 
+    // Apply hero content (texts, badge, stats)
+    const heroContent = settings.hero_content;
+    if (heroContent) {
+      if (heroContent.badge) {
+        const badgeEl = document.querySelector('.hero-badge');
+        if (badgeEl) {
+          const dot = badgeEl.querySelector('.dot');
+          badgeEl.textContent = heroContent.badge;
+          if (dot) badgeEl.prepend(dot);
+        }
+      }
+      if (heroContent.title) {
+        const titleEl = document.getElementById('hero-title');
+        if (titleEl) {
+          // Support "word <highlight>text</highlight>" or just plain text
+          const parts = heroContent.title.match(/^(.*?),?\s*(.*)$/);
+          if (parts && parts[2]) {
+            titleEl.innerHTML = parts[1] + ', <span class="highlight">' + parts[2] + '</span>';
+          } else {
+            titleEl.textContent = heroContent.title;
+          }
+        }
+      }
+      if (heroContent.subtitle) {
+        const subEl = document.getElementById('hero-subtitle');
+        if (subEl) subEl.textContent = heroContent.subtitle;
+      }
+      if (heroContent.cta_text) {
+        const ctaBtn = document.querySelector('.hero-actions .btn-primary');
+        if (ctaBtn) {
+          const svg = ctaBtn.querySelector('svg');
+          ctaBtn.textContent = heroContent.cta_text + ' ';
+          if (svg) ctaBtn.appendChild(svg);
+        }
+      }
+      if (heroContent.cta2_text) {
+        const cta2Btn = document.querySelector('.hero-actions .btn-outline');
+        if (cta2Btn) cta2Btn.textContent = heroContent.cta2_text;
+      }
+      if (heroContent.stats && heroContent.stats.length) {
+        const statEls = document.querySelectorAll('.hero-stat');
+        heroContent.stats.forEach((s, i) => {
+          if (statEls[i]) {
+            const valEl = statEls[i].querySelector('.hero-stat-value');
+            const lblEl = statEls[i].querySelector('.hero-stat-label');
+            if (valEl && s.value) valEl.textContent = s.value;
+            if (lblEl && s.label) lblEl.textContent = s.label;
+          }
+        });
+      }
+    }
+
+    // Apply section titles
+    const sectionTitles = settings.section_titles;
+    if (sectionTitles) {
+      // Products section
+      if (sectionTitles.products) {
+        const productsHeader = document.querySelector('#produtos .section-header');
+        if (productsHeader) {
+          const lbl = productsHeader.querySelector('.section-label');
+          const ttl = productsHeader.querySelector('.section-title');
+          const sub = productsHeader.querySelector('.section-subtitle');
+          if (lbl && sectionTitles.products.label) lbl.textContent = sectionTitles.products.label;
+          if (ttl && sectionTitles.products.title) ttl.textContent = sectionTitles.products.title;
+          if (sub && sectionTitles.products.subtitle) sub.textContent = sectionTitles.products.subtitle;
+        }
+      }
+      // Testimonials section
+      if (sectionTitles.testimonials) {
+        const testHeader = document.querySelector('#depoimentos .section-header');
+        if (testHeader) {
+          const lbl = testHeader.querySelector('.section-label');
+          const ttl = testHeader.querySelector('.section-title');
+          const sub = testHeader.querySelector('.section-subtitle');
+          if (lbl && sectionTitles.testimonials.label) lbl.textContent = sectionTitles.testimonials.label;
+          if (ttl && sectionTitles.testimonials.title) ttl.textContent = sectionTitles.testimonials.title;
+          if (sub && sectionTitles.testimonials.subtitle) sub.textContent = sectionTitles.testimonials.subtitle;
+        }
+      }
+      // FAQ section
+      if (sectionTitles.faq) {
+        const faqHeader = document.querySelector('#faq .section-header');
+        if (faqHeader) {
+          const lbl = faqHeader.querySelector('.section-label');
+          const ttl = faqHeader.querySelector('.section-title');
+          const sub = faqHeader.querySelector('.section-subtitle');
+          if (lbl && sectionTitles.faq.label) lbl.textContent = sectionTitles.faq.label;
+          if (ttl && sectionTitles.faq.title) ttl.textContent = sectionTitles.faq.title;
+          if (sub && sectionTitles.faq.subtitle) sub.textContent = sectionTitles.faq.subtitle;
+        }
+      }
+    }
+
+    // Apply trust bar
+    const trustBar = settings.trust_bar;
+    if (Array.isArray(trustBar) && trustBar.length) {
+      const trustItems = document.querySelectorAll('.trust-item');
+      trustBar.forEach((t, i) => {
+        if (trustItems[i]) {
+          const textEl = trustItems[i].querySelector('.trust-text');
+          if (textEl) {
+            const spanEl = textEl.querySelector('span');
+            // Get first text node (title)
+            const firstText = textEl.childNodes[0];
+            if (firstText && t.title) firstText.textContent = t.title;
+            if (spanEl && t.subtitle) spanEl.textContent = t.subtitle;
+          }
+        }
+      });
+    }
+
+    // Apply testimonials
+    const testimonials = settings.testimonials;
+    if (Array.isArray(testimonials) && testimonials.length) {
+      const grid = document.querySelector('.testimonials-grid');
+      if (grid) {
+        grid.innerHTML = testimonials.map(t => {
+          const rating = parseInt(t.rating) || 5;
+          const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+          const initial = (t.name || 'A')[0].toUpperCase();
+          return `<div class="testimonial-card reveal revealed">
+            <div class="testimonial-stars">${stars}</div>
+            <p class="testimonial-text">"${t.text || ''}"</p>
+            <div class="testimonial-author">
+              <div class="testimonial-avatar">${initial}</div>
+              <div class="testimonial-author-info"><p class="name">${t.name || ''}</p><p class="location">${t.location || ''}</p></div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // Apply FAQ items
+    const faqItems = settings.faq_items;
+    if (Array.isArray(faqItems) && faqItems.length) {
+      const faqList = document.getElementById('faq-list');
+      if (faqList) {
+        faqList.innerHTML = faqItems.map(f => `<div class="faq-item reveal revealed">
+          <button class="faq-question" aria-expanded="false">
+            <span>${f.question || ''}</span>
+            <svg class="faq-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div class="faq-answer"><p>${f.answer || ''}</p></div>
+        </div>`).join('');
+        // Re-attach FAQ toggle listeners
+        faqList.querySelectorAll('.faq-question').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const item = btn.closest('.faq-item');
+            const isOpen = item.classList.contains('open');
+            faqList.querySelectorAll('.faq-item.open').forEach(el => el.classList.remove('open'));
+            if (!isOpen) item.classList.add('open');
+          });
+        });
+      }
+    }
+
     // Apply special offers carousel
     const allOffers = settings.offers;
     let activeOffers = [];
@@ -662,6 +960,11 @@ document.addEventListener('DOMContentLoaded', () => {
       renderOffersCarousel(activeOffers);
     } else {
       if (offerSection) offerSection.style.display = 'none';
+    }
+
+    // Apply inline edit mode changes (saved via WYSIWYG editor)
+    if (typeof window._applyEditModeFromSettings === 'function') {
+      window._applyEditModeFromSettings(settings);
     }
   }
 
@@ -742,38 +1045,150 @@ document.addEventListener('DOMContentLoaded', () => {
       if (c.text_color) CATEGORY_COLORS[c.slug] = c.text_color;
     });
 
-    // Rebuild filter buttons
-    const container = document.getElementById('product-filters');
-    if (!container) return;
-    const priceWrap = container.querySelector('.filter-price-wrap');
-    container.querySelectorAll('.filter-btn').forEach(b => b.remove());
-
-    const allBtn = document.createElement('button');
-    allBtn.className = 'filter-btn active';
-    allBtn.dataset.filter = 'all';
-    allBtn.textContent = 'Todos';
-    container.insertBefore(allBtn, priceWrap);
-
-    cats.forEach(c => {
-      const btn = document.createElement('button');
-      btn.className = 'filter-btn';
-      btn.dataset.filter = c.slug;
-      btn.textContent = c.name;
-      if (c.text_color) btn.style.setProperty('--cat-color', c.text_color);
-      container.insertBefore(btn, priceWrap);
-    });
-
-    // Re-bind filter events
-    container.querySelectorAll('.filter-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        activeFilter = btn.dataset.filter;
-        container.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b === btn));
-        applyFilters();
-      });
-    });
+    // Render categories carousel (the round filter)
+    renderCategoriesCarousel(cats);
 
     // Re-render product cards to apply category colors
     renderProductsGrid();
+  }
+
+  // ============================================
+  // CATEGORIES CAROUSEL
+  // ============================================
+
+  // Beauty-themed SVG icons for each category slug
+  const CATEGORY_ICONS = {
+    'all': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="7" cy="17" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg>`,
+    'prata-925': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c0-6 8-8 8-14a8 8 0 10-16 0c0 6 8 8 8 14z"/><path d="M8.5 8.5c1-.8 2.5-1 3.5-.5s1.8 1.5 1 2.5-2.5 1-3.5.5"/></svg>`,
+    'maquiagem': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5l7-14a1.5 1.5 0 012.8 0l.2.5"/><path d="M4 19.5c0 1.4 1.1 2.5 2.5 2.5h0c1.4 0 2.5-1.1 2.5-2.5V18H4v1.5z"/><path d="M20 4l-6 12"/><circle cx="20" cy="4" r="2"/></svg>`,
+    'cosmeticos': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v3H9z"/><path d="M7 6h10v2a1 1 0 01-1 1H8a1 1 0 01-1-1V6z"/><path d="M8 9h8l.5 12a1 1 0 01-1 1h-7a1 1 0 01-1-1L8 9z"/><path d="M12 13v4"/></svg>`,
+    'acessorios': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="7"/><circle cx="12" cy="10" r="3"/><path d="M12 17v4"/><path d="M9 21h6"/><path d="M8.5 4.5L6 2M15.5 4.5L18 2"/></svg>`,
+    'skincare': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H9a1 1 0 00-1 1v3h8V3a1 1 0 00-1-1z"/><rect x="7" y="6" width="10" height="16" rx="3"/><path d="M12 10v4m-2-2h4"/></svg>`,
+    'perfumes': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6V3h4v3"/><rect x="7" y="6" width="10" height="16" rx="3"/><path d="M7 11h10"/><path d="M8 2c-2-1-3 0-3 1M16 2c2-1 3 0 3 1"/><path d="M12 14v3"/></svg>`,
+    'cabelos': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22c0-8 3-12 8-12s8 4 8 12"/><path d="M8 10C8 5 9 2 12 2s4 3 4 8"/><path d="M12 10v5"/><path d="M9 12c0 2 1.5 3 3 3s3-1 3-3"/></svg>`,
+    'unhas': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c-3 0-5 3-5 7 0 3 2 5 5 5s5-2 5-5c0-4-2-7-5-7z"/><path d="M9 14l-1 8h8l-1-8"/><path d="M10 6c.5-.5 1.5-.5 2 0"/></svg>`,
+    'avon': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 5H19l-4 3.5 1.5 5.5-4.5-3-4.5 3 1.5-5.5L5 8h5.5z"/></svg>`,
+    'vivara': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>`,
+    'kits': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2v-7"/><path d="M22 7H2v5h20V7z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 110-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 100-5C13 2 12 7 12 7z"/></svg>`
+  };
+
+  // Gradient backgrounds for category circles
+  const CATEGORY_GRADIENTS = {
+    'all': 'linear-gradient(135deg, #FDF2F5, #FAE4EC)',
+    'prata-925': 'linear-gradient(135deg, #F0EAF5, #E4DAF0)',
+    'maquiagem': 'linear-gradient(135deg, #FEF0F2, #FCDDE2)',
+    'cosmeticos': 'linear-gradient(135deg, #EBF4FA, #D6E8F2)',
+    'acessorios': 'linear-gradient(135deg, #FEF7E0, #FDF0C4)',
+    'skincare': 'linear-gradient(135deg, #E5F9EE, #C8F0DA)',
+    'perfumes': 'linear-gradient(135deg, #F6F0FF, #EDE2FC)',
+    'cabelos': 'linear-gradient(135deg, #FFF0F1, #FEDEE2)',
+    'unhas': 'linear-gradient(135deg, #FDF0F6, #FBE2EF)',
+    'avon': 'linear-gradient(135deg, #FFF5F7, #FFE8EE)',
+    'vivara': 'linear-gradient(135deg, #F5F0FA, #EBE2F5)',
+    'kits': 'linear-gradient(135deg, #FFF8F0, #FFEFD8)'
+  };
+
+  function renderCategoriesCarousel(cats) {
+    const track = document.getElementById('cat-carousel-track');
+    if (!track) return;
+
+    // Count products per category
+    const allProducts = Object.values(PRODUCTS);
+    const totalCount = allProducts.length;
+    const catCounts = {};
+    cats.forEach(c => {
+      catCounts[c.slug] = allProducts.filter(p => p.categorySlug === c.slug).length;
+    });
+
+    let html = '';
+
+    // "Todos" item
+    const allIcon = CATEGORY_ICONS['all'];
+    const allGrad = CATEGORY_GRADIENTS['all'];
+    html += `<div class="cat-carousel-item active" data-filter="all">
+      <div class="cat-carousel-circle" style="background:${allGrad}">
+        <div class="cat-carousel-circle-inner">
+          <span class="cat-carousel-icon">${allIcon}</span>
+        </div>
+      </div>
+      <span class="cat-carousel-name">Todos</span>
+      <span class="cat-carousel-count">${totalCount}</span>
+    </div>`;
+
+    cats.forEach(c => {
+      const slug = c.slug;
+      const icon = CATEGORY_ICONS[slug] || CATEGORY_ICONS['all'];
+      const grad = CATEGORY_GRADIENTS[slug] || 'linear-gradient(135deg, #FDF0F4, #F8DCE6)';
+      const count = catCounts[slug] || 0;
+
+      let innerContent;
+      if (c.image_url) {
+        innerContent = `<img src="${c.image_url}" alt="${c.name}" loading="lazy">`;
+      } else {
+        innerContent = `<span class="cat-carousel-icon">${icon}</span>`;
+      }
+
+      html += `<div class="cat-carousel-item" data-filter="${slug}">
+        <div class="cat-carousel-circle" style="background:${grad}">
+          <div class="cat-carousel-circle-inner">
+            ${innerContent}
+          </div>
+        </div>
+        <span class="cat-carousel-name">${c.name}</span>
+        ${count > 0 ? `<span class="cat-carousel-count">${count}</span>` : ''}
+      </div>`;
+    });
+
+    track.innerHTML = html;
+
+    // Click events on carousel items
+    track.querySelectorAll('.cat-carousel-item').forEach(item => {
+      item.addEventListener('click', () => {
+        // Update active state
+        track.querySelectorAll('.cat-carousel-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+
+        const filter = item.dataset.filter;
+        setActiveFilter(filter);
+      });
+    });
+
+    // Setup carousel arrows
+    setupCarouselArrows();
+  }
+
+  function setupCarouselArrows() {
+    const track = document.getElementById('cat-carousel-track');
+    const leftBtn = document.getElementById('cat-arrow-left');
+    const rightBtn = document.getElementById('cat-arrow-right');
+    if (!track || !leftBtn || !rightBtn) return;
+
+    const scrollAmount = 260;
+
+    leftBtn.addEventListener('click', () => {
+      track.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+    });
+    rightBtn.addEventListener('click', () => {
+      track.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    });
+
+    // Drag-to-scroll
+    let isDragging = false, startX = 0, scrollLeft = 0;
+    track.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      track.style.cursor = 'grabbing';
+      startX = e.pageX - track.offsetLeft;
+      scrollLeft = track.scrollLeft;
+      e.preventDefault();
+    });
+    track.addEventListener('mouseleave', () => { isDragging = false; track.style.cursor = 'grab'; });
+    track.addEventListener('mouseup', () => { isDragging = false; track.style.cursor = 'grab'; });
+    track.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const x = e.pageX - track.offsetLeft;
+      const walk = (x - startX) * 1.5;
+      track.scrollLeft = scrollLeft - walk;
+    });
   }
 
   // ============================================
@@ -1050,19 +1465,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!gallerySlides.length) return;
     galleryIndex = (index + gallerySlides.length) % gallerySlides.length;
     const slide = gallerySlides[galleryIndex];
-    // Clear previous content (keep zoom hint)
+    // Preserve persistent elements
     const zoomHint = galleryMain.querySelector('.gallery-zoom-hint');
+    const badgeEl = galleryMain.querySelector('.gallery-badge');
     galleryMain.innerHTML = '';
     if (isImageUrl(slide)) {
-      galleryMain.style.background = currentProduct?.imageBg || 'linear-gradient(135deg, #f0e6f6, #d4c5e0)';
+      galleryMain.style.background = currentProduct?.imageBg || 'linear-gradient(145deg, #f8f5f2 0%, #f0ece8 100%)';
       const img = document.createElement('img');
       img.src = slide;
       img.alt = currentProduct?.name || 'Produto';
-      img.style.cssText = 'max-width:90%;max-height:90%;object-fit:contain;border-radius:8px;';
       galleryMain.appendChild(img);
     } else {
       galleryMain.style.background = slide;
-      // For gradient-only slides, render SVG if available
       if (currentProduct && PRODUCT_SVGS[currentProduct.id]) {
         const svgDiv = document.createElement('div');
         svgDiv.innerHTML = PRODUCT_SVGS[currentProduct.id];
@@ -1071,6 +1485,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     if (zoomHint) galleryMain.appendChild(zoomHint);
+    if (badgeEl) galleryMain.appendChild(badgeEl);
     // Update thumbs
     document.querySelectorAll('#gallery-thumbs .gallery-thumb').forEach((th, i) => th.classList.toggle('active', i === galleryIndex));
     // Show/hide nav buttons
@@ -1078,6 +1493,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const nextBtn = document.getElementById('gallery-next');
     if (prevBtn) prevBtn.style.display = gallerySlides.length > 1 ? '' : 'none';
     if (nextBtn) nextBtn.style.display = gallerySlides.length > 1 ? '' : 'none';
+    // Update counter
+    const counterEl = document.getElementById('gallery-counter');
+    if (counterEl) {
+      if (gallerySlides.length > 1) {
+        counterEl.textContent = `${galleryIndex + 1} / ${gallerySlides.length}`;
+        counterEl.style.display = '';
+      } else {
+        counterEl.style.display = 'none';
+      }
+    }
   }
 
   function buildGalleryThumbs() {
@@ -1121,9 +1546,29 @@ document.addEventListener('DOMContentLoaded', () => {
     // Prices
     const pricesEl = document.getElementById('modal-prices');
     if (product.oldPrice) {
-      pricesEl.innerHTML = `<span class="modal-old-price">R$ ${product.oldPrice.toFixed(2).replace('.', ',')}</span><span class="modal-price">R$ ${product.price.toFixed(2).replace('.', ',')}</span>`;
+      const discountPct = Math.round((1 - product.price / product.oldPrice) * 100);
+      pricesEl.innerHTML = `<span class="modal-old-price">R$ ${product.oldPrice.toFixed(2).replace('.', ',')}</span><span class="modal-price">R$ ${product.price.toFixed(2).replace('.', ',')}</span><span class="modal-price-discount">-${discountPct}%</span>`;
     } else {
       pricesEl.innerHTML = `<span class="modal-price">R$ ${product.price.toFixed(2).replace('.', ',')}</span>`;
+    }
+
+    // Installments
+    const installmentsEl = document.getElementById('modal-installments');
+    if (installmentsEl) {
+      const installmentCount = product.price >= 100 ? 6 : (product.price >= 50 ? 3 : 2);
+      const installmentValue = (product.price / installmentCount).toFixed(2).replace('.', ',');
+      installmentsEl.innerHTML = `ou <strong>${installmentCount}x de R$ ${installmentValue}</strong> sem juros`;
+    }
+
+    // Discount badge on gallery
+    const badgeEl = document.getElementById('gallery-badge');
+    if (badgeEl) {
+      if (product.oldPrice) {
+        const discountPct = Math.round((1 - product.price / product.oldPrice) * 100);
+        badgeEl.innerHTML = `<span class="badge-discount">-${discountPct}%</span>`;
+      } else {
+        badgeEl.innerHTML = '';
+      }
     }
 
     document.getElementById('modal-desc').textContent = product.description;
@@ -1220,66 +1665,233 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Product image click → open modal (handled by grid delegation)
-  // Category cards → filter products on click
-  document.querySelectorAll('.category-card[data-filter]').forEach(card => {
-    card.addEventListener('click', () => {
-      const filter = card.dataset.filter;
-      document.getElementById('produtos').scrollIntoView({ behavior: 'smooth' });
-      setTimeout(() => {
-        setActiveFilter(filter);
-      }, 500);
-    });
-  });
+  // Category carousel items are handled in renderCategoriesCarousel()
 
   // ============================================
-  // PRODUCT FILTERS
+  // PRODUCT FILTERS (Sort, Price Range, Category)
   // ============================================
-  const filterBtns = document.querySelectorAll('.filter-btn');
-  const priceFilter = document.getElementById('price-filter');
-  const priceFilterValue = document.getElementById('price-filter-value');
   const productsGrid = document.getElementById('products-grid');
   const noResults = document.getElementById('products-no-results');
   let activeFilter = 'all';
+  let currentSort = 'relevance';
 
-  function setActiveFilter(filter) {
-    activeFilter = filter;
-    filterBtns.forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.filter === filter);
-    });
-    applyFilters();
+  // Price range elements
+  const priceMinSlider = document.getElementById('price-filter-min');
+  const priceMaxSlider = document.getElementById('price-filter-max');
+  const priceMinDisplay = document.getElementById('price-min-display');
+  const priceMaxDisplay = document.getElementById('price-max-display');
+  const priceRangeFill = document.getElementById('price-range-fill');
+  const filterActiveCount = document.getElementById('filter-active-count');
+  const filterCountNum = document.getElementById('filter-count-num');
+  const filterResultsCount = document.getElementById('filter-results-count');
+
+  function updatePriceRangeFill() {
+    if (!priceMinSlider || !priceMaxSlider || !priceRangeFill) return;
+    const min = parseInt(priceMinSlider.value);
+    const max = parseInt(priceMaxSlider.value);
+    const rangeMax = parseInt(priceMinSlider.max);
+    const left = (min / rangeMax) * 100;
+    const right = 100 - (max / rangeMax) * 100;
+    priceRangeFill.style.left = left + '%';
+    priceRangeFill.style.right = right + '%';
+    if (priceMinDisplay) priceMinDisplay.textContent = `R$ ${min}`;
+    if (priceMaxDisplay) priceMaxDisplay.textContent = `R$ ${max}`;
   }
 
-  filterBtns.forEach(btn => {
+  // Prevent min > max and vice versa
+  if (priceMinSlider && priceMaxSlider) {
+    priceMinSlider.addEventListener('input', () => {
+      if (parseInt(priceMinSlider.value) > parseInt(priceMaxSlider.value)) {
+        priceMinSlider.value = priceMaxSlider.value;
+      }
+      updatePriceRangeFill();
+      updateActiveQuickBtn();
+      applyFilters();
+    });
+    priceMaxSlider.addEventListener('input', () => {
+      if (parseInt(priceMaxSlider.value) < parseInt(priceMinSlider.value)) {
+        priceMaxSlider.value = priceMinSlider.value;
+      }
+      updatePriceRangeFill();
+      updateActiveQuickBtn();
+      applyFilters();
+    });
+    updatePriceRangeFill();
+  }
+
+  // Quick price buttons
+  document.querySelectorAll('.price-quick').forEach(btn => {
     btn.addEventListener('click', () => {
-      setActiveFilter(btn.dataset.filter);
+      const min = btn.dataset.min;
+      const max = btn.dataset.max;
+      if (priceMinSlider) priceMinSlider.value = min;
+      if (priceMaxSlider) priceMaxSlider.value = max;
+      updatePriceRangeFill();
+      updateActiveQuickBtn();
+      applyFilters();
     });
   });
 
-  if (priceFilter) {
-    priceFilter.addEventListener('input', () => {
-      priceFilterValue.textContent = priceFilter.value;
-      applyFilters();
+  function updateActiveQuickBtn() {
+    if (!priceMinSlider || !priceMaxSlider) return;
+    const min = priceMinSlider.value;
+    const max = priceMaxSlider.value;
+    document.querySelectorAll('.price-quick').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.min === min && btn.dataset.max === max);
     });
   }
 
+  // Sort dropdown
+  const sortToggle = document.getElementById('sort-toggle');
+  const sortDropdown = document.getElementById('sort-dropdown');
+  const sortLabel = document.getElementById('sort-label');
+
+  if (sortToggle && sortDropdown) {
+    sortToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = sortDropdown.classList.contains('open');
+      closeAllDropdowns();
+      if (!isOpen) {
+        sortDropdown.classList.add('open');
+        sortToggle.classList.add('active');
+      }
+    });
+    sortDropdown.querySelectorAll('.filter-dropdown-item').forEach(item => {
+      item.addEventListener('click', () => {
+        currentSort = item.dataset.sort;
+        if (sortLabel) sortLabel.textContent = item.textContent;
+        sortDropdown.querySelectorAll('.filter-dropdown-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        closeAllDropdowns();
+        applyFilters();
+      });
+    });
+  }
+
+  // Price dropdown
+  const priceToggle = document.getElementById('price-toggle');
+  const priceDropdown = document.getElementById('price-dropdown');
+  const priceLabel = document.getElementById('price-label');
+
+  if (priceToggle && priceDropdown) {
+    priceToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = priceDropdown.classList.contains('open');
+      closeAllDropdowns();
+      if (!isOpen) {
+        priceDropdown.classList.add('open');
+        priceToggle.classList.add('active');
+      }
+    });
+    // Prevent dropdown from closing when interacting with sliders
+    priceDropdown.addEventListener('click', (e) => { e.stopPropagation(); });
+  }
+
+  // Close dropdowns on outside click
+  function closeAllDropdowns() {
+    document.querySelectorAll('.filter-dropdown').forEach(d => d.classList.remove('open'));
+    if (sortToggle) sortToggle.classList.remove('active');
+    if (priceToggle) priceToggle.classList.remove('active');
+  }
+  document.addEventListener('click', closeAllDropdowns);
+
+  // Clear all filters
+  const clearAllBtn = document.getElementById('filter-clear-all');
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', () => {
+      if (priceMinSlider) priceMinSlider.value = 0;
+      if (priceMaxSlider) priceMaxSlider.value = 500;
+      updatePriceRangeFill();
+      currentSort = 'relevance';
+      if (sortLabel) sortLabel.textContent = 'Relevância';
+      if (sortDropdown) {
+        sortDropdown.querySelectorAll('.filter-dropdown-item').forEach((i, idx) => {
+          i.classList.toggle('active', idx === 0);
+        });
+      }
+      setActiveFilter('all');
+      updateActiveQuickBtn();
+    });
+  }
+
+  function setActiveFilter(filter) {
+    activeFilter = filter;
+    // Sync round carousel active state
+    const track = document.getElementById('cat-carousel-track');
+    if (track) {
+      track.querySelectorAll('.cat-carousel-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.filter === filter);
+      });
+    }
+    applyFilters();
+  }
+
   function applyFilters() {
-    const maxPrice = priceFilter ? parseFloat(priceFilter.value) : 500;
-    const cards = productsGrid.querySelectorAll('.product-card');
+    const minPrice = priceMinSlider ? parseFloat(priceMinSlider.value) : 0;
+    const maxPrice = priceMaxSlider ? parseFloat(priceMaxSlider.value) : 500;
+    const cards = Array.from(productsGrid.querySelectorAll('.product-card'));
     let visibleCount = 0;
 
+    // Filter
     cards.forEach(card => {
       const category = card.dataset.category;
       const price = parseFloat(card.dataset.price);
       const matchCategory = activeFilter === 'all' || category === activeFilter;
-      const matchPrice = price <= maxPrice;
+      const matchPrice = price >= minPrice && price <= maxPrice;
 
       if (matchCategory && matchPrice) {
         card.style.display = '';
+        card.dataset.visible = '1';
         visibleCount++;
       } else {
         card.style.display = 'none';
+        card.dataset.visible = '0';
       }
     });
+
+    // Sort visible cards
+    const visibleCards = cards.filter(c => c.dataset.visible === '1');
+    if (currentSort !== 'relevance' && visibleCards.length > 1) {
+      visibleCards.sort((a, b) => {
+        const priceA = parseFloat(a.dataset.price);
+        const priceB = parseFloat(b.dataset.price);
+        const nameA = (a.dataset.name || '').toLowerCase();
+        const nameB = (b.dataset.name || '').toLowerCase();
+        switch (currentSort) {
+          case 'price-asc': return priceA - priceB;
+          case 'price-desc': return priceB - priceA;
+          case 'name-asc': return nameA.localeCompare(nameB);
+          case 'newest': return -1; // keep original order (newest first from DB)
+          default: return 0;
+        }
+      });
+      visibleCards.forEach(card => productsGrid.appendChild(card));
+    }
+
+    // Update results count
+    if (filterResultsCount) {
+      filterResultsCount.textContent = visibleCount === 1 ? '1 produto' : `${visibleCount} produtos`;
+    }
+
+    // Update active filters badge
+    let activeCount = 0;
+    if (activeFilter !== 'all') activeCount++;
+    if (minPrice > 0 || maxPrice < 500) activeCount++;
+    if (currentSort !== 'relevance') activeCount++;
+
+    if (filterActiveCount) {
+      filterActiveCount.style.display = activeCount > 0 ? '' : 'none';
+      if (filterCountNum) filterCountNum.textContent = activeCount;
+    }
+
+    // Update price toggle label
+    if (priceLabel) {
+      if (minPrice > 0 || maxPrice < 500) {
+        priceLabel.textContent = `R$${minPrice}–R$${maxPrice}`;
+      } else {
+        priceLabel.textContent = 'Preço';
+      }
+    }
 
     if (noResults) {
       noResults.style.display = visibleCount === 0 ? 'block' : 'none';
@@ -2605,10 +3217,14 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           isAdmin = await supabase.checkAdmin(user.email);
           admBtnOpen.style.display = isAdmin ? '' : 'none';
+          const emBtn = document.getElementById('btn-edit-mode');
+          if (emBtn) emBtn.style.display = isAdmin ? '' : 'none';
         } catch(e) { admBtnOpen.style.display = 'none'; }
       } else {
         isAdmin = false;
         admBtnOpen.style.display = 'none';
+        const emBtn = document.getElementById('btn-edit-mode');
+        if (emBtn) emBtn.style.display = 'none';
         closeAdminPanel();
       }
     };
@@ -2617,6 +3233,8 @@ document.addEventListener('DOMContentLoaded', () => {
       supabase.checkAdmin(currentUser.email).then(result => {
         isAdmin = result;
         admBtnOpen.style.display = result ? '' : 'none';
+        const emBtn = document.getElementById('btn-edit-mode');
+        if (emBtn) emBtn.style.display = result ? '' : 'none';
       }).catch(() => {});
     }
 
@@ -2657,6 +3275,9 @@ document.addEventListener('DOMContentLoaded', () => {
     async function admLoadAll() {
       await Promise.all([admLoadProducts(), admLoadCoupons(), admLoadSettings(), admLoadOffers(), admLoadOrders(), admLoadCategories()]);
       admUpdateDashboard();
+      admLoadTestimonials();
+      admLoadFaq();
+      admFillHeroContent();
     }
 
     function admUpdateDashboard() {
@@ -2707,34 +3328,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function admRefreshSiteFilters() {
-      const container = document.getElementById('product-filters');
-      if (!container) return;
-      // Keep only the price filter, rebuild category buttons
-      const priceWrap = container.querySelector('.filter-price-wrap');
-      container.querySelectorAll('.filter-btn').forEach(b => b.remove());
-      // Add "Todos" button first
-      const allBtn = document.createElement('button');
-      allBtn.className = 'filter-btn active';
-      allBtn.dataset.filter = 'all';
-      allBtn.textContent = 'Todos';
-      container.insertBefore(allBtn, priceWrap);
-      // Add category buttons
-      admCategories.filter(c => c.active !== false).forEach(c => {
-        const btn = document.createElement('button');
-        btn.className = 'filter-btn';
-        btn.dataset.filter = c.slug;
-        btn.textContent = c.name;
-        if (c.text_color) btn.style.setProperty('--cat-color', c.text_color);
-        container.insertBefore(btn, priceWrap);
-      });
-      // Re-bind filter events
-      container.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          activeFilter = btn.dataset.filter;
-          container.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b === btn));
-          applyFilters();
-        });
-      });
+      // Categories are filtered via the round carousel only
+      // No filter buttons to rebuild
     }
 
     function admRenderCategories() {
@@ -3762,27 +4357,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('adm-set-instagram').value = social.instagram || '';
       document.getElementById('adm-set-facebook').value = social.facebook || '';
       document.getElementById('adm-set-tiktok').value = social.tiktok || '';
-      const promo = admSettings.promo_banner || {};
-      document.getElementById('adm-set-promo-active').checked = promo.active !== false;
-      document.getElementById('adm-set-promo-text').value = promo.text || '';
-
-      // Hero image
-      const hero = admSettings.hero_image || {};
-      const heroUrl = hero.url || '';
-      const heroPreview = document.getElementById('adm-hero-drop-preview');
-      const heroEmpty = document.getElementById('adm-hero-drop-empty');
-      const heroImg = document.getElementById('adm-hero-drop-img');
-      const heroHidden = document.getElementById('adm-hero-image-url');
-      if (heroUrl && heroPreview && heroEmpty && heroImg) {
-        heroImg.src = heroUrl;
-        heroPreview.style.display = '';
-        heroEmpty.style.display = 'none';
-        if (heroHidden) heroHidden.value = heroUrl;
-      } else if (heroPreview && heroEmpty) {
-        heroPreview.style.display = 'none';
-        heroEmpty.style.display = '';
-        if (heroHidden) heroHidden.value = '';
-      }
+      // Hero image and Promo banner are now managed in Edit Mode
     }
 
     document.getElementById('adm-form-contact')?.addEventListener('submit', async (e) => {
@@ -3797,70 +4372,314 @@ document.addEventListener('DOMContentLoaded', () => {
       try { await supabase.upsertSiteSetting('social', value); admSettings.social = value; admNotify('Redes atualizadas!'); } catch(err) { admNotify('Erro ao salvar', 'error'); }
     });
 
-    document.getElementById('adm-form-promo')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const value = { active: document.getElementById('adm-set-promo-active').checked, text: document.getElementById('adm-set-promo-text').value.trim() };
-      try { await supabase.upsertSiteSetting('promo_banner', value); admSettings.promo_banner = value; admNotify('Banner atualizado!'); admRefreshSettings(); } catch(err) { admNotify('Erro ao salvar', 'error'); }
-    });
+    // Hero Image and Promo Banner admin forms removed — managed via Edit Mode
 
-    // ---- HERO IMAGE UPLOAD ----
-    (function initHeroImageUpload() {
-      const dropzone = document.getElementById('adm-hero-dropzone');
-      const fileInput = document.getElementById('adm-hero-image-upload');
-      const emptyState = document.getElementById('adm-hero-drop-empty');
-      const previewState = document.getElementById('adm-hero-drop-preview');
-      const previewImg = document.getElementById('adm-hero-drop-img');
-      const removeBtn = document.getElementById('adm-hero-drop-remove');
-      const loadingState = document.getElementById('adm-hero-drop-loading');
-      const hiddenUrl = document.getElementById('adm-hero-image-url');
-      if (!dropzone) return;
+    // ---- HERO CONTENT, SECTION TITLES, TRUST BAR ----
+    function admFillHeroContent() {
+      const hero = admSettings.hero_content || {};
+      document.getElementById('adm-hero-badge').value = hero.badge || '';
+      document.getElementById('adm-hero-title').value = hero.title || '';
+      document.getElementById('adm-hero-subtitle').value = hero.subtitle || '';
+      document.getElementById('adm-hero-cta').value = hero.cta_text || '';
+      document.getElementById('adm-hero-cta2').value = hero.cta2_text || '';
 
-      dropzone.addEventListener('click', (e) => {
-        if (e.target.closest('.adm-dropzone-remove')) return;
-        fileInput.click();
+      const stats = hero.stats || [];
+      for (let i = 1; i <= 3; i++) {
+        const s = stats[i - 1] || {};
+        const valEl = document.getElementById('adm-hero-stat' + i + '-val');
+        const lblEl = document.getElementById('adm-hero-stat' + i + '-label');
+        if (valEl) valEl.value = s.value || '';
+        if (lblEl) lblEl.value = s.label || '';
+      }
+
+      const st = admSettings.section_titles || {};
+      const sections = ['products', 'testimonials', 'faq'];
+      sections.forEach(sec => {
+        const d = st[sec] || {};
+        const lbl = document.getElementById('adm-st-' + sec + '-label');
+        const ttl = document.getElementById('adm-st-' + sec + '-title');
+        const sub = document.getElementById('adm-st-' + sec + '-subtitle');
+        if (lbl) lbl.value = d.label || '';
+        if (ttl) ttl.value = d.title || '';
+        if (sub) sub.value = d.subtitle || '';
       });
-      dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
-      dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-      dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); if (e.dataTransfer.files.length) handleHeroFile(e.dataTransfer.files[0]); });
-      fileInput.addEventListener('change', () => { if (fileInput.files.length) handleHeroFile(fileInput.files[0]); });
-      removeBtn?.addEventListener('click', (e) => { e.stopPropagation(); previewState.style.display = 'none'; emptyState.style.display = ''; previewImg.src = ''; hiddenUrl.value = ''; });
 
-      async function handleHeroFile(file) {
-        if (file.size > 5 * 1024 * 1024) { admNotify('Imagem muito grande (máx. 5MB)', 'error'); return; }
-        emptyState.style.display = 'none';
-        previewState.style.display = 'none';
-        loadingState.style.display = 'flex';
-        try {
-          const url = await supabase.uploadImage(file);
-          previewImg.src = url;
-          hiddenUrl.value = url;
-          previewState.style.display = '';
-        } catch (err) {
-          emptyState.style.display = '';
-          admNotify('Erro no upload: ' + err.message, 'error');
-        } finally {
-          loadingState.style.display = 'none';
-          fileInput.value = '';
-        }
+      const trust = admSettings.trust_bar || [];
+      for (let i = 1; i <= 4; i++) {
+        const t = trust[i - 1] || {};
+        const ttlEl = document.getElementById('adm-trust-' + i + '-title');
+        const subEl = document.getElementById('adm-trust-' + i + '-sub');
+        if (ttlEl) ttlEl.value = t.title || '';
+        if (subEl) subEl.value = t.subtitle || '';
       }
-    })();
+    }
 
-    document.getElementById('adm-form-hero-image')?.addEventListener('submit', async (e) => {
+    document.getElementById('adm-form-hero-texts')?.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const url = document.getElementById('adm-hero-image-url').value.trim();
-      const value = { url: url };
+      const existing = admSettings.hero_content || {};
+      const value = {
+        badge: document.getElementById('adm-hero-badge').value.trim(),
+        title: document.getElementById('adm-hero-title').value.trim(),
+        subtitle: document.getElementById('adm-hero-subtitle').value.trim(),
+        cta_text: document.getElementById('adm-hero-cta').value.trim(),
+        cta2_text: document.getElementById('adm-hero-cta2').value.trim(),
+        stats: existing.stats || []
+      };
       try {
-        await supabase.upsertSiteSetting('hero_image', value);
-        admSettings.hero_image = value;
-        admNotify('Imagem do Hero atualizada!');
+        await supabase.upsertSiteSetting('hero_content', value);
+        admSettings.hero_content = value;
+        admNotify('Textos do Hero salvos!');
         admRefreshSettings();
-      } catch (err) {
-        admNotify('Erro ao salvar: ' + (err.message || ''), 'error');
-      }
+      } catch (err) { admNotify('Erro ao salvar', 'error'); }
     });
 
-    // ---- REPORTS / SALES DASHBOARD ----
+    document.getElementById('adm-form-hero-stats')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const existing = admSettings.hero_content || {};
+      const stats = [];
+      for (let i = 1; i <= 3; i++) {
+        stats.push({
+          value: document.getElementById('adm-hero-stat' + i + '-val').value.trim(),
+          label: document.getElementById('adm-hero-stat' + i + '-label').value.trim()
+        });
+      }
+      const value = { ...existing, stats };
+      try {
+        await supabase.upsertSiteSetting('hero_content', value);
+        admSettings.hero_content = value;
+        admNotify('Estatísticas salvas!');
+        admRefreshSettings();
+      } catch (err) { admNotify('Erro ao salvar', 'error'); }
+    });
+
+    document.getElementById('adm-form-section-titles')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const value = {};
+      ['products', 'testimonials', 'faq'].forEach(sec => {
+        value[sec] = {
+          label: document.getElementById('adm-st-' + sec + '-label').value.trim(),
+          title: document.getElementById('adm-st-' + sec + '-title').value.trim(),
+          subtitle: document.getElementById('adm-st-' + sec + '-subtitle').value.trim()
+        };
+      });
+      try {
+        await supabase.upsertSiteSetting('section_titles', value);
+        admSettings.section_titles = value;
+        admNotify('Títulos das seções salvos!');
+        admRefreshSettings();
+      } catch (err) { admNotify('Erro ao salvar', 'error'); }
+    });
+
+    document.getElementById('adm-form-trust-bar')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const items = [];
+      for (let i = 1; i <= 4; i++) {
+        items.push({
+          title: document.getElementById('adm-trust-' + i + '-title').value.trim(),
+          subtitle: document.getElementById('adm-trust-' + i + '-sub').value.trim()
+        });
+      }
+      try {
+        await supabase.upsertSiteSetting('trust_bar', items);
+        admSettings.trust_bar = items;
+        admNotify('Barra de confiança salva!');
+        admRefreshSettings();
+      } catch (err) { admNotify('Erro ao salvar', 'error'); }
+    });
+
+    // ---- TESTIMONIALS CRUD ----
+    let admTestimonials = [];
+
+    function admLoadTestimonials() {
+      admTestimonials = admSettings.testimonials || [];
+      admRenderTestimonials();
+    }
+
+    function admRenderTestimonials() {
+      const grid = document.getElementById('adm-testimonials-grid');
+      const empty = document.getElementById('adm-testimonials-empty');
+      if (!grid) return;
+      if (!admTestimonials.length) {
+        grid.innerHTML = '';
+        if (empty) empty.style.display = '';
+        return;
+      }
+      if (empty) empty.style.display = 'none';
+      grid.innerHTML = admTestimonials.map((t, i) => {
+        const stars = '★'.repeat(parseInt(t.rating) || 5) + '☆'.repeat(5 - (parseInt(t.rating) || 5));
+        return `<div class="adm-content-card">
+          <div class="adm-content-card-head">
+            <div class="adm-content-card-avatar">${(t.name || 'A')[0].toUpperCase()}</div>
+            <div>
+              <strong>${t.name || 'Sem nome'}</strong>
+              <small>${t.location || ''}</small>
+            </div>
+            <span class="adm-content-card-stars">${stars}</span>
+          </div>
+          <p class="adm-content-card-text">"${t.text || ''}"</p>
+          <div class="adm-content-card-actions">
+            <button class="adm-btn-sm adm-btn-edit" onclick="window._admEditTestimonial(${i})">Editar</button>
+            <button class="adm-btn-sm adm-btn-delete" onclick="window._admDeleteTestimonial(${i})">Excluir</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function admOpenTestimonialModal(idx) {
+      const modal = document.getElementById('adm-testimonial-modal');
+      const title = document.getElementById('adm-testimonial-modal-title');
+      if (!modal) return;
+
+      document.getElementById('adm-tf-editing-idx').value = idx;
+      if (idx >= 0 && admTestimonials[idx]) {
+        const t = admTestimonials[idx];
+        title.textContent = 'Editar Depoimento';
+        document.getElementById('adm-tf-name').value = t.name || '';
+        document.getElementById('adm-tf-location').value = t.location || '';
+        document.getElementById('adm-tf-rating').value = t.rating || '5';
+        document.getElementById('adm-tf-text').value = t.text || '';
+      } else {
+        title.textContent = 'Novo Depoimento';
+        document.getElementById('adm-tf-name').value = '';
+        document.getElementById('adm-tf-location').value = '';
+        document.getElementById('adm-tf-rating').value = '5';
+        document.getElementById('adm-tf-text').value = '';
+      }
+      modal.classList.add('open');
+    }
+
+    async function admSaveTestimonials() {
+      try {
+        await supabase.upsertSiteSetting('testimonials', admTestimonials);
+        admSettings.testimonials = admTestimonials;
+        admRenderTestimonials();
+        admRefreshSettings();
+      } catch (err) { admNotify('Erro ao salvar depoimentos', 'error'); }
+    }
+
+    document.getElementById('adm-btn-add-testimonial')?.addEventListener('click', () => admOpenTestimonialModal(-1));
+
+    document.getElementById('adm-testimonial-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const idx = parseInt(document.getElementById('adm-tf-editing-idx').value);
+      const item = {
+        name: document.getElementById('adm-tf-name').value.trim(),
+        location: document.getElementById('adm-tf-location').value.trim(),
+        rating: document.getElementById('adm-tf-rating').value,
+        text: document.getElementById('adm-tf-text').value.trim()
+      };
+      if (idx >= 0 && admTestimonials[idx]) {
+        admTestimonials[idx] = item;
+      } else {
+        admTestimonials.push(item);
+      }
+      await admSaveTestimonials();
+      document.getElementById('adm-testimonial-modal')?.classList.remove('open');
+      admNotify('Depoimento salvo!');
+    });
+
+    window._admEditTestimonial = (idx) => admOpenTestimonialModal(idx);
+    window._admDeleteTestimonial = async (idx) => {
+      if (!confirm('Excluir este depoimento?')) return;
+      admTestimonials.splice(idx, 1);
+      await admSaveTestimonials();
+      admNotify('Depoimento excluído!');
+    };
+
+    // ---- FAQ CRUD ----
+    let admFaqItems = [];
+
+    function admLoadFaq() {
+      admFaqItems = admSettings.faq_items || [];
+      admRenderFaq();
+    }
+
+    function admRenderFaq() {
+      const grid = document.getElementById('adm-faq-grid');
+      const empty = document.getElementById('adm-faq-empty');
+      if (!grid) return;
+      if (!admFaqItems.length) {
+        grid.innerHTML = '';
+        if (empty) empty.style.display = '';
+        return;
+      }
+      if (empty) empty.style.display = 'none';
+      grid.innerHTML = admFaqItems.map((f, i) => {
+        return `<div class="adm-content-card">
+          <div class="adm-content-card-head">
+            <div class="adm-content-card-num">${i + 1}</div>
+            <strong class="adm-content-card-question">${f.question || ''}</strong>
+          </div>
+          <p class="adm-content-card-text">${f.answer || ''}</p>
+          <div class="adm-content-card-actions">
+            <button class="adm-btn-sm adm-btn-edit" onclick="window._admEditFaq(${i})">Editar</button>
+            <button class="adm-btn-sm adm-btn-delete" onclick="window._admDeleteFaq(${i})">Excluir</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function admOpenFaqModal(idx) {
+      const modal = document.getElementById('adm-faq-modal');
+      const title = document.getElementById('adm-faq-modal-title');
+      if (!modal) return;
+
+      document.getElementById('adm-faqf-editing-idx').value = idx;
+      if (idx >= 0 && admFaqItems[idx]) {
+        const f = admFaqItems[idx];
+        title.textContent = 'Editar Pergunta';
+        document.getElementById('adm-faqf-question').value = f.question || '';
+        document.getElementById('adm-faqf-answer').value = f.answer || '';
+      } else {
+        title.textContent = 'Nova Pergunta';
+        document.getElementById('adm-faqf-question').value = '';
+        document.getElementById('adm-faqf-answer').value = '';
+      }
+      modal.classList.add('open');
+    }
+
+    async function admSaveFaq() {
+      try {
+        await supabase.upsertSiteSetting('faq_items', admFaqItems);
+        admSettings.faq_items = admFaqItems;
+        admRenderFaq();
+        admRefreshSettings();
+      } catch (err) { admNotify('Erro ao salvar FAQ', 'error'); }
+    }
+
+    document.getElementById('adm-btn-add-faq')?.addEventListener('click', () => admOpenFaqModal(-1));
+
+    document.getElementById('adm-faq-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const idx = parseInt(document.getElementById('adm-faqf-editing-idx').value);
+      const item = {
+        question: document.getElementById('adm-faqf-question').value.trim(),
+        answer: document.getElementById('adm-faqf-answer').value.trim()
+      };
+      if (idx >= 0 && admFaqItems[idx]) {
+        admFaqItems[idx] = item;
+      } else {
+        admFaqItems.push(item);
+      }
+      await admSaveFaq();
+      document.getElementById('adm-faq-modal')?.classList.remove('open');
+      admNotify('Pergunta salva!');
+    });
+
+    window._admEditFaq = (idx) => admOpenFaqModal(idx);
+    window._admDeleteFaq = async (idx) => {
+      if (!confirm('Excluir esta pergunta?')) return;
+      admFaqItems.splice(idx, 1);
+      await admSaveFaq();
+      admNotify('Pergunta excluída!');
+    };
+
+    // ---- REPORTS / SALES DASHBOARD (Redesigned) ----
     document.getElementById('adm-report-period')?.addEventListener('change', admRenderReports);
+
+    // Export buttons
+    document.getElementById('rpt-export-csv')?.addEventListener('click', exportReportsCSV);
+    document.getElementById('rpt-export-pdf')?.addEventListener('click', exportReportsPDF);
 
     function admRenderReports() {
       const periodVal = document.getElementById('adm-report-period')?.value || '30';
@@ -3883,11 +4702,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const conversion = filtered.length ? ((delivered + paid.length) / filtered.length * 100) : 0;
 
       // KPIs
-      document.getElementById('rpt-revenue').textContent = admFormatPrice(totalRevenue);
-      document.getElementById('rpt-orders').textContent = filtered.length;
-      document.getElementById('rpt-avg').textContent = admFormatPrice(avgTicket);
-      document.getElementById('rpt-delivered').textContent = delivered;
-      document.getElementById('rpt-canceled').textContent = canceled;
+      animateNumber('rpt-revenue', totalRevenue, true);
+      animateNumber('rpt-orders', filtered.length);
+      animateNumber('rpt-avg', avgTicket, true);
+      animateNumber('rpt-delivered', delivered);
+      animateNumber('rpt-canceled', canceled);
       document.getElementById('rpt-conversion').textContent = conversion.toFixed(0) + '%';
 
       // Revenue trend
@@ -3902,107 +4721,205 @@ document.addEventListener('DOMContentLoaded', () => {
         if (prevRevenue > 0) {
           const pct = ((totalRevenue - prevRevenue) / prevRevenue * 100).toFixed(0);
           const isUp = totalRevenue >= prevRevenue;
-          trendEl.innerHTML = `<span style="color:${isUp ? '#059669' : '#dc2626'}">${isUp ? '\u2191' : '\u2193'} ${Math.abs(pct)}% vs per\u00edodo anterior</span>`;
+          trendEl.className = 'rpt-kpi__trend ' + (isUp ? 'rpt-kpi__trend--up' : 'rpt-kpi__trend--down');
+          trendEl.innerHTML = `${isUp ? '↑' : '↓'} ${Math.abs(pct)}% vs anterior`;
         } else {
           trendEl.innerHTML = '';
+          trendEl.className = 'rpt-kpi__trend';
         }
       }
 
-      // Revenue by day chart (bar chart using CSS)
-      renderRevenueChart(paid, startDate, now);
-
-      // Status donut chart
-      renderStatusChart(filtered);
-
-      // Top products
-      renderTopProductsChart(paid);
-
-      // Categories chart
-      renderCategoriesChart(paid);
-
-      // Recent orders table
-      renderRecentOrders(filtered.slice(0, 10));
+      // Charts
+      renderRevenueLineChart(paid, startDate, now);
+      renderStatusPieChart(filtered);
+      renderTopProductsBarChart(paid);
+      renderCategoriesPieChart(paid);
+      renderWeekdayChart(filtered);
+      renderRecentOrders(filtered.slice(0, 15));
     }
 
-    function renderRevenueChart(orders, startDate, endDate) {
+    // Animate KPI numbers
+    function animateNumber(id, target, isCurrency = false) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const start = parseFloat(el.textContent.replace(/[^\d.-]/g, '')) || 0;
+      const diff = target - start;
+      const duration = 600;
+      const startTime = performance.now();
+      function tick(now) {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = start + diff * eased;
+        el.textContent = isCurrency ? admFormatPrice(current) : Math.round(current).toString();
+        if (progress < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    // ---- SVG LINE CHART: Revenue Over Time ----
+    function renderRevenueLineChart(orders, startDate, endDate) {
       const container = document.getElementById('adm-chart-revenue');
       if (!container) return;
 
-      // Group by day
       const dayMap = {};
       const days = startDate ? Math.ceil((endDate - startDate) / 86400000) : 30;
-      const displayDays = Math.min(days, 30); // show max 30 bars
+      const displayDays = Math.min(days, 60);
 
-      // Build day buckets
       for (let i = displayDays - 1; i >= 0; i--) {
         const d = new Date(endDate.getTime() - i * 86400000);
         const key = d.toISOString().slice(0, 10);
         dayMap[key] = 0;
       }
-
       orders.forEach(o => {
         const key = new Date(o.created_at).toISOString().slice(0, 10);
         if (dayMap[key] !== undefined) dayMap[key] += parseFloat(o.total_price) || 0;
       });
 
+      const labels = Object.keys(dayMap);
       const values = Object.values(dayMap);
       const maxVal = Math.max(...values, 1);
-      const labels = Object.keys(dayMap);
+      const n = labels.length;
 
-      container.innerHTML = `<div class="adm-bar-chart">${labels.map((lbl, i) => {
-        const pct = (values[i] / maxVal * 100).toFixed(0);
-        const dayLabel = new Date(lbl + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-        return `<div class="adm-bar-col" title="${dayLabel}: ${admFormatPrice(values[i])}">
-          <div class="adm-bar" style="height:${pct}%"></div>
-          <span class="adm-bar-lbl">${labels.length <= 15 ? dayLabel : (i % Math.ceil(labels.length / 10) === 0 ? dayLabel : '')}</span>
-        </div>`;
-      }).join('')}</div>`;
+      if (!n) {
+        container.innerHTML = noDataHTML('Sem dados de receita');
+        return;
+      }
+
+      const pad = { top: 20, right: 20, bottom: 36, left: 60 };
+      const w = container.clientWidth || 700;
+      const h = container.clientHeight || 260;
+      const cw = w - pad.left - pad.right;
+      const ch = h - pad.top - pad.bottom;
+
+      function x(i) { return pad.left + (i / Math.max(n - 1, 1)) * cw; }
+      function y(v) { return pad.top + ch - (v / maxVal) * ch; }
+
+      // Grid lines (5 horizontal)
+      let gridLines = '';
+      let yLabels = '';
+      for (let j = 0; j <= 4; j++) {
+        const val = (maxVal / 4) * j;
+        const yy = y(val);
+        gridLines += `<line x1="${pad.left}" y1="${yy}" x2="${w - pad.right}" y2="${yy}" class="rpt-grid-line"/>`;
+        yLabels += `<text x="${pad.left - 8}" y="${yy + 3}" text-anchor="end" class="rpt-axis-label">${admFormatPrice(val)}</text>`;
+      }
+
+      // X-axis labels
+      let xLabels = '';
+      const step = Math.max(1, Math.ceil(n / 10));
+      for (let i = 0; i < n; i += step) {
+        const dayLabel = new Date(labels[i] + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        xLabels += `<text x="${x(i)}" y="${h - 4}" text-anchor="middle" class="rpt-axis-label">${dayLabel}</text>`;
+      }
+
+      // Line path
+      const points = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+      const linePath = `M${points.join('L')}`;
+      const areaPath = `${linePath}L${x(n - 1).toFixed(1)},${y(0).toFixed(1)}L${x(0).toFixed(1)},${y(0).toFixed(1)}Z`;
+
+      // Dots
+      let dots = '';
+      values.forEach((v, i) => {
+        const dayLabel = new Date(labels[i] + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        dots += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.5" class="rpt-dot">
+          <title>${dayLabel}: ${admFormatPrice(v)}</title>
+        </circle>`;
+      });
+
+      container.innerHTML = `
+        <svg class="rpt-line-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">
+          <defs>
+            <linearGradient id="rpt-gradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#C4879A" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#C4879A" stop-opacity="0.02"/>
+            </linearGradient>
+          </defs>
+          ${gridLines}
+          ${yLabels}
+          ${xLabels}
+          <path d="${areaPath}" class="rpt-area-fill"/>
+          <path d="${linePath}" class="rpt-line-path"/>
+          ${dots}
+        </svg>`;
     }
 
-    function renderStatusChart(orders) {
+    // ---- DONUT/PIE CHART HELPER (SVG ring) ----
+    function renderSvgDonut(container, items, centerText, centerSub) {
+      if (!container) return;
+      const total = items.reduce((s, i) => s + i.value, 0) || 1;
+
+      if (!items.length || total === 0) {
+        container.innerHTML = noDataHTML('Sem dados');
+        return;
+      }
+
+      const r = 70, cx = 85, cy = 85, stroke = 28;
+      const circumference = 2 * Math.PI * r;
+      let offset = circumference * 0.25; // start at 12 o'clock
+
+      let circles = '';
+      items.forEach((item) => {
+        const pct = item.value / total;
+        const dashLen = circumference * pct;
+        circles += `<circle cx="${cx}" cy="${cy}" r="${r}"
+          fill="none" stroke="${item.color}" stroke-width="${stroke}"
+          stroke-dasharray="${dashLen} ${circumference - dashLen}"
+          stroke-dashoffset="${-offset}"
+          style="transform-origin:${cx}px ${cy}px">
+          <title>${item.label}: ${item.display || item.value} (${(pct * 100).toFixed(0)}%)</title>
+        </circle>`;
+        offset -= dashLen;
+      });
+
+      const legend = items.map(item => {
+        const pct = (item.value / total * 100).toFixed(0);
+        return `<div class="rpt-legend-row">
+          <span class="rpt-legend-dot" style="background:${item.color}"></span>
+          ${item.label} (${pct}%)
+          <strong>${item.display || item.value}</strong>
+        </div>`;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="rpt-pie-wrap">
+          <svg class="rpt-pie-svg" viewBox="0 0 170 170" width="170" height="170">
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#f1f5f9" stroke-width="${stroke}"/>
+            ${circles}
+            <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="14" font-weight="800" fill="#0f172a">${centerText}</text>
+            <text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="9" fill="#94a3b8" font-weight="500">${centerSub}</text>
+          </svg>
+          <div class="rpt-pie-legend">${legend}</div>
+        </div>`;
+    }
+
+    // ---- PIE CHART: Orders by Status ----
+    function renderStatusPieChart(orders) {
       const container = document.getElementById('adm-chart-status');
       if (!container) return;
 
-      const statuses = {
-        pending: { label: 'Pendente', color: '#f59e0b', count: 0 },
-        paid: { label: 'Pago', color: '#10b981', count: 0 },
-        delivered: { label: 'Entregue', color: '#3b82f6', count: 0 },
-        canceled: { label: 'Cancelado', color: '#ef4444', count: 0 }
-      };
+      const statuses = [
+        { key: 'pending', label: 'Pendente', color: '#f59e0b' },
+        { key: 'paid', label: 'Pago', color: '#10b981' },
+        { key: 'delivered', label: 'Entregue', color: '#3b82f6' },
+        { key: 'canceled', label: 'Cancelado', color: '#ef4444' },
+      ];
 
-      orders.forEach(o => {
-        if (statuses[o.status]) statuses[o.status].count++;
-      });
+      const counts = {};
+      orders.forEach(o => { counts[o.status] = (counts[o.status] || 0) + 1; });
 
-      const total = orders.length || 1;
-      const items = Object.values(statuses).filter(s => s.count > 0);
+      const items = statuses
+        .filter(s => counts[s.key])
+        .map(s => ({ label: s.label, value: counts[s.key], color: s.color, display: counts[s.key].toString() }));
 
-      // Build conic-gradient segments
-      let gradParts = [];
-      let cumPct = 0;
-      items.forEach(s => {
-        const pct = (s.count / total * 100);
-        gradParts.push(`${s.color} ${cumPct}% ${cumPct + pct}%`);
-        cumPct += pct;
-      });
-      if (!gradParts.length) gradParts.push('#e2e8f0 0% 100%');
-
-      container.innerHTML = `
-        <div class="adm-donut-chart">
-          <div class="adm-donut" style="background:conic-gradient(${gradParts.join(', ')})">
-            <div class="adm-donut-hole"><strong>${orders.length}</strong><small>pedidos</small></div>
-          </div>
-          <div class="adm-donut-legend">${items.map(s =>
-            `<div class="adm-legend-item"><span class="adm-legend-dot" style="background:${s.color}"></span>${s.label}: <strong>${s.count}</strong> (${(s.count/total*100).toFixed(0)}%)</div>`
-          ).join('')}</div>
-        </div>`;
+      renderSvgDonut(container, items, orders.length.toString(), 'pedidos');
     }
 
-    function renderTopProductsChart(paidOrders) {
+    // ---- HORIZONTAL BAR CHART: Top Products ----
+    function renderTopProductsBarChart(paidOrders) {
       const container = document.getElementById('adm-chart-top-products');
       if (!container) return;
 
-      // Parse product names from whatsapp messages
       const productCount = {};
       paidOrders.forEach(o => {
         if (o.whatsapp_message) {
@@ -4020,25 +4937,25 @@ document.addEventListener('DOMContentLoaded', () => {
       const maxCount = sorted.length ? sorted[0][1] : 1;
 
       if (!sorted.length) {
-        container.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:20px;">Sem dados de produtos vendidos.</p>';
+        container.innerHTML = noDataHTML('Sem dados de produtos vendidos');
         return;
       }
 
-      container.innerHTML = `<div class="adm-hbar-chart">${sorted.map(([name, count]) => {
+      container.innerHTML = `<div class="rpt-hbar-chart">${sorted.map(([name, count], i) => {
         const pct = (count / maxCount * 100).toFixed(0);
-        return `<div class="adm-hbar-row">
-          <span class="adm-hbar-label">${name}</span>
-          <div class="adm-hbar-track"><div class="adm-hbar-fill" style="width:${pct}%"></div></div>
-          <span class="adm-hbar-val">${count}</span>
+        return `<div class="rpt-hbar-row">
+          <span class="rpt-hbar-label" title="${name}">${name}</span>
+          <div class="rpt-hbar-track"><div class="rpt-hbar-fill rpt-hbar-fill--${i % 8}" style="width:${pct}%" data-value="${count}"></div></div>
+          <span class="rpt-hbar-val">${count}</span>
         </div>`;
       }).join('')}</div>`;
     }
 
-    function renderCategoriesChart(paidOrders) {
+    // ---- DONUT: Revenue by Category ----
+    function renderCategoriesPieChart(paidOrders) {
       const container = document.getElementById('adm-chart-categories');
       if (!container) return;
 
-      // Map products to categories
       const catRevenue = {};
       paidOrders.forEach(o => {
         if (o.whatsapp_message) {
@@ -4047,7 +4964,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (match) {
               const productName = match[1].trim();
               const price = parseFloat(match[2].replace(',', '.')) || 0;
-              // Find product category
               const product = admProducts.find(p => p.name === productName);
               const catSlug = product?.category_slug || 'outros';
               const catName = ADM_CATEGORIES[catSlug] || catSlug || 'Outros';
@@ -4057,49 +4973,200 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
 
-      const items = Object.entries(catRevenue).sort((a, b) => b[1] - a[1]);
-      const total = items.reduce((s, [,v]) => s + v, 0) || 1;
+      const entries = Object.entries(catRevenue).sort((a, b) => b[1] - a[1]);
+      const total = entries.reduce((s, [,v]) => s + v, 0) || 1;
 
-      if (!items.length) {
-        container.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:20px;">Sem dados de vendas por categoria.</p>';
+      if (!entries.length) {
+        container.innerHTML = noDataHTML('Sem dados de categorias');
         return;
       }
 
       const colors = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4', '#84cc16'];
-      let gradParts = [];
-      let cumPct = 0;
-      items.forEach(([, val], i) => {
-        const pct = val / total * 100;
-        const color = colors[i % colors.length];
-        gradParts.push(`${color} ${cumPct}% ${cumPct + pct}%`);
-        cumPct += pct;
-      });
+      const items = entries.map(([name, val], i) => ({
+        label: name, value: val, color: colors[i % colors.length],
+        display: admFormatPrice(val)
+      }));
 
-      container.innerHTML = `
-        <div class="adm-donut-chart">
-          <div class="adm-donut" style="background:conic-gradient(${gradParts.join(', ')})">
-            <div class="adm-donut-hole"><strong>${admFormatPrice(total)}</strong><small>total</small></div>
-          </div>
-          <div class="adm-donut-legend">${items.map(([name, val], i) =>
-            `<div class="adm-legend-item"><span class="adm-legend-dot" style="background:${colors[i % colors.length]}"></span>${name}: <strong>${admFormatPrice(val)}</strong></div>`
-          ).join('')}</div>
-        </div>`;
+      renderSvgDonut(container, items, admFormatPrice(total), 'total');
     }
 
+    // ---- BAR CHART: Orders by Day of Week ----
+    function renderWeekdayChart(orders) {
+      const container = document.getElementById('adm-chart-weekday');
+      if (!container) return;
+
+      const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+      const dayCounts = [0, 0, 0, 0, 0, 0, 0];
+
+      orders.forEach(o => {
+        const d = new Date(o.created_at).getDay();
+        dayCounts[d]++;
+      });
+
+      const max = Math.max(...dayCounts, 1);
+
+      if (!orders.length) {
+        container.innerHTML = noDataHTML('Sem dados de pedidos');
+        return;
+      }
+
+      container.innerHTML = `<div class="rpt-vbar-chart">${dayNames.map((name, i) => {
+        const pct = (dayCounts[i] / max * 100).toFixed(0);
+        return `<div class="rpt-vbar-col" title="${name}: ${dayCounts[i]} pedidos">
+          <span class="rpt-vbar-val">${dayCounts[i]}</span>
+          <div class="rpt-vbar" style="height:${pct}%"></div>
+          <span class="rpt-vbar-lbl">${name}</span>
+        </div>`;
+      }).join('')}</div>`;
+    }
+
+    // ---- RECENT ORDERS TABLE ----
     function renderRecentOrders(orders) {
       const tbody = document.getElementById('adm-report-recent-tbody');
       if (!tbody) return;
       if (!orders.length) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:20px;">Nenhum pedido no per\u00edodo.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:30px;">Nenhum pedido no período.</td></tr>';
         return;
       }
-      tbody.innerHTML = orders.map(o => `<tr>
-        <td><strong>#${o.id}</strong></td>
-        <td><small>${admFormatDate(o.created_at)}</small></td>
-        <td><small>${o.customer_name || o.user_email || 'Visitante'}</small></td>
-        <td><strong>${admFormatPrice(parseFloat(o.total_price) || 0)}</strong></td>
-        <td>${admOrderStatusBadge(o.status)}</td>
-      </tr>`).join('');
+      tbody.innerHTML = orders.map(o => {
+        // Count items from whatsapp_message
+        let itemCount = 0;
+        if (o.whatsapp_message) {
+          const matches = o.whatsapp_message.match(/^\d+\.\s\*/gm);
+          itemCount = matches ? matches.length : 0;
+        }
+        return `<tr>
+          <td><strong style="color:#C4879A">#${o.id}</strong></td>
+          <td><small>${admFormatDate(o.created_at)}</small></td>
+          <td>${o.customer_name || o.user_email || '<span style="color:#94a3b8">Visitante</span>'}</td>
+          <td><small style="color:#64748b">${itemCount} ${itemCount === 1 ? 'item' : 'itens'}</small></td>
+          <td><strong>${admFormatPrice(parseFloat(o.total_price) || 0)}</strong></td>
+          <td>${admOrderStatusBadge(o.status)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // ---- NO DATA STATE ----
+    function noDataHTML(msg) {
+      return `<div class="rpt-no-data">
+        <svg width="40" height="40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        <span>${msg}</span>
+      </div>`;
+    }
+
+    // ============ EXPORT FUNCTIONS ============
+    function exportReportsCSV() {
+      const periodVal = document.getElementById('adm-report-period')?.value || '30';
+      const now = new Date();
+      let startDate = null;
+      if (periodVal !== 'all') {
+        startDate = new Date(now.getTime() - parseInt(periodVal) * 86400000);
+      }
+
+      const filtered = startDate
+        ? admOrders.filter(o => new Date(o.created_at) >= startDate)
+        : admOrders;
+
+      if (!filtered.length) { admNotify('Sem dados para exportar', 'error'); return; }
+
+      const headers = ['ID', 'Data', 'Cliente', 'Email', 'Total', 'Status'];
+      const rows = filtered.map(o => [
+        o.id,
+        new Date(o.created_at).toLocaleDateString('pt-BR'),
+        (o.customer_name || '').replace(/,/g, ';'),
+        (o.user_email || '').replace(/,/g, ';'),
+        (parseFloat(o.total_price) || 0).toFixed(2),
+        o.status
+      ]);
+
+      let csv = '\uFEFF'; // BOM for Excel UTF-8
+      csv += headers.join(',') + '\n';
+      csv += rows.map(r => r.join(',')).join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `relatorio-pedidos-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      admNotify('CSV exportado com sucesso!');
+    }
+
+    function exportReportsPDF() {
+      const periodVal = document.getElementById('adm-report-period')?.value || '30';
+      const now = new Date();
+      let startDate = null;
+      if (periodVal !== 'all') {
+        startDate = new Date(now.getTime() - parseInt(periodVal) * 86400000);
+      }
+
+      const filtered = startDate
+        ? admOrders.filter(o => new Date(o.created_at) >= startDate)
+        : admOrders;
+
+      if (!filtered.length) { admNotify('Sem dados para exportar', 'error'); return; }
+
+      const paid = filtered.filter(o => o.status === 'delivered' || o.status === 'paid');
+      const totalRevenue = paid.reduce((s, o) => s + (parseFloat(o.total_price) || 0), 0);
+      const avgTicket = paid.length ? totalRevenue / paid.length : 0;
+      const delivered = filtered.filter(o => o.status === 'delivered').length;
+      const canceled = filtered.filter(o => o.status === 'canceled').length;
+
+      const periodText = periodVal === 'all' ? 'Todo período' : `Últimos ${periodVal} dias`;
+
+      const printContent = `
+        <!DOCTYPE html>
+        <html><head>
+          <meta charset="UTF-8">
+          <title>Relatório Toque de Fada</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; padding: 40px; }
+            .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #C4879A; padding-bottom: 20px; }
+            .header h1 { font-size: 22px; color: #C4879A; }
+            .header p { font-size: 12px; color: #64748b; margin-top: 4px; }
+            .kpis { display: flex; gap: 16px; margin-bottom: 30px; flex-wrap: wrap; }
+            .kpi { flex: 1; min-width: 120px; text-align: center; padding: 16px; background: #f8fafc; border-radius: 8px; }
+            .kpi-val { font-size: 20px; font-weight: 800; }
+            .kpi-lbl { font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 4px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 11px; }
+            th { background: #f1f5f9; padding: 8px 10px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; }
+            td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; }
+            tr:nth-child(even) { background: #fafbfc; }
+            .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #94a3b8; }
+          </style>
+        </head><body>
+          <div class="header">
+            <h1>Toque de Fada — Relatório de Vendas</h1>
+            <p>${periodText} • Gerado em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-val">${admFormatPrice(totalRevenue)}</div><div class="kpi-lbl">Receita</div></div>
+            <div class="kpi"><div class="kpi-val">${filtered.length}</div><div class="kpi-lbl">Pedidos</div></div>
+            <div class="kpi"><div class="kpi-val">${admFormatPrice(avgTicket)}</div><div class="kpi-lbl">Ticket Médio</div></div>
+            <div class="kpi"><div class="kpi-val">${delivered}</div><div class="kpi-lbl">Entregues</div></div>
+            <div class="kpi"><div class="kpi-val">${canceled}</div><div class="kpi-lbl">Cancelados</div></div>
+          </div>
+          <h3 style="font-size:14px;margin-bottom:8px;">Detalhamento de Pedidos</h3>
+          <table>
+            <thead><tr><th>#</th><th>Data</th><th>Cliente</th><th>Total</th><th>Status</th></tr></thead>
+            <tbody>${filtered.map(o => `<tr>
+              <td>#${o.id}</td>
+              <td>${new Date(o.created_at).toLocaleDateString('pt-BR')}</td>
+              <td>${o.customer_name || o.user_email || 'Visitante'}</td>
+              <td>${admFormatPrice(parseFloat(o.total_price) || 0)}</td>
+              <td>${o.status === 'delivered' ? 'Entregue' : o.status === 'paid' ? 'Pago' : o.status === 'canceled' ? 'Cancelado' : 'Pendente'}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+          <div class="footer">Toque de Fada © ${new Date().getFullYear()} • Relatório gerado automaticamente</div>
+        </body></html>`;
+
+      const win = window.open('', '_blank');
+      win.document.write(printContent);
+      win.document.close();
+      setTimeout(() => { win.print(); }, 500);
+      admNotify('Relatório PDF aberto para impressão!');
     }
 
     // ---- MODAL CLOSE (delegation) ----
@@ -4119,6 +5186,1916 @@ document.addEventListener('DOMContentLoaded', () => {
       // Reload settings on the main site in real-time
       loadSiteSettings();
     }
+
+  })();
+
+  // ============================================================
+  //  INLINE EDIT MODE — Per-Section Contextual Editor v3
+  // ============================================================
+  (function initEditMode() {
+    'use strict';
+
+    // --- Editable elements config ---
+    const EDITABLE_ELEMS = [
+      { sel: '.hero-badge', key: 'hero_badge', label: 'Badge' },
+      { sel: '#hero-title', key: 'hero_title', label: 'Título Hero', rich: true },
+      { sel: '#hero-subtitle', key: 'hero_subtitle', label: 'Subtítulo Hero' },
+      { sel: '.hero-actions .btn-primary', key: 'hero_cta', label: 'Botão Principal' },
+      { sel: '.hero-actions .btn-outline', key: 'hero_cta2', label: 'Botão Secundário' },
+      { sel: '.hero-stat:nth-child(1) .hero-stat-value', key: 'stat1_val', label: 'Stat 1' },
+      { sel: '.hero-stat:nth-child(1) .hero-stat-label', key: 'stat1_lbl', label: 'Label Stat 1' },
+      { sel: '.hero-stat:nth-child(2) .hero-stat-value', key: 'stat2_val', label: 'Stat 2' },
+      { sel: '.hero-stat:nth-child(2) .hero-stat-label', key: 'stat2_lbl', label: 'Label Stat 2' },
+      { sel: '.hero-stat:nth-child(3) .hero-stat-value', key: 'stat3_val', label: 'Stat 3' },
+      { sel: '.hero-stat:nth-child(3) .hero-stat-label', key: 'stat3_lbl', label: 'Label Stat 3' },
+      { sel: '.hero-float-card--top .float-card-text', key: 'float_top', label: 'Card Flutuante', rich: true },
+      { sel: '.hero-float-card--bottom .float-card-text', key: 'float_bottom', label: 'Card Flutuante', rich: true },
+      { sel: '.trust-item:nth-child(1) .trust-text', key: 'trust1', label: 'Confiança 1', rich: true },
+      { sel: '.trust-item:nth-child(2) .trust-text', key: 'trust2', label: 'Confiança 2', rich: true },
+      { sel: '.trust-item:nth-child(3) .trust-text', key: 'trust3', label: 'Confiança 3', rich: true },
+      { sel: '.trust-item:nth-child(4) .trust-text', key: 'trust4', label: 'Confiança 4', rich: true },
+      { sel: '#produtos .section-label', key: 'prod_label', label: 'Label Produtos' },
+      { sel: '#produtos .section-title', key: 'prod_title', label: 'Título Produtos' },
+      { sel: '#produtos .section-subtitle', key: 'prod_sub', label: 'Subtítulo Produtos' },
+      { sel: '.offer-section .offer-label', key: 'offer_label', label: 'Label Ofertas' },
+      { sel: '.offer-section-title', key: 'offer_title', label: 'Título Ofertas' },
+      { sel: '.offer-section-subtitle', key: 'offer_sub', label: 'Subtítulo Ofertas' },
+      { sel: '#depoimentos .section-label', key: 'test_label', label: 'Label Depoimentos' },
+      { sel: '#depoimentos .section-title', key: 'test_title', label: 'Título Depoimentos' },
+      { sel: '#depoimentos .section-subtitle', key: 'test_sub', label: 'Subtítulo Depoimentos' },
+      { sel: '#faq .section-label', key: 'faq_label', label: 'Label FAQ' },
+      { sel: '#faq .section-title', key: 'faq_title', label: 'Título FAQ' },
+      { sel: '#faq .section-subtitle', key: 'faq_sub', label: 'Subtítulo FAQ' },
+      { sel: '#contato .section-label', key: 'contact_label', label: 'Label Contato' },
+      { sel: '#contato .section-title', key: 'contact_title', label: 'Título Contato' },
+      { sel: '#contato .section-subtitle', key: 'contact_sub', label: 'Subtítulo Contato' },
+      { sel: '.newsletter-section .section-title', key: 'news_title', label: 'Título Newsletter' },
+      { sel: '.newsletter-section .section-subtitle', key: 'news_sub', label: 'Subtítulo Newsletter' },
+      { sel: '.footer-brand .footer-desc', key: 'footer_about', label: 'Sobre (Footer)' },
+      { sel: '.footer-main > div:nth-child(2) .footer-heading', key: 'footer_h_links', label: 'Título Links' },
+      { sel: '.footer-main > div:nth-child(3) .footer-heading', key: 'footer_h_cat', label: 'Título Categorias' },
+      { sel: '.footer-main > div:nth-child(4) .footer-heading', key: 'footer_h_contact', label: 'Título Contato Footer' },
+    ];
+
+    const MULTI_EDITABLE = [
+      { parentSel: '#faq-list .faq-item', children: [
+        { sel: '.faq-question span', keyBase: 'faq_q', label: 'Pergunta' },
+        { sel: '.faq-answer p', keyBase: 'faq_a', label: 'Resposta' },
+      ]},
+      { parentSel: '.testimonials-grid .testimonial-card', children: [
+        { sel: '.testimonial-text', keyBase: 'testimonial_text', label: 'Depoimento' },
+        { sel: '.testimonial-author-info .name', keyBase: 'testimonial_name', label: 'Nome' },
+        { sel: '.testimonial-author-info .location', keyBase: 'testimonial_loc', label: 'Local' },
+      ]},
+    ];
+
+    // --- Reorderable sections (based on DOM order, not static array) ---
+    const SECTION_SELS = [
+      { sel: '#home', label: 'Hero', fixed: true },
+      { sel: '.trust-bar', label: 'Confiança' },
+      { sel: '#produtos', label: 'Produtos' },
+      { sel: '#ofertas', label: 'Ofertas' },
+      { sel: '#depoimentos', label: 'Depoimentos' },
+      { sel: '#faq', label: 'FAQ' },
+      { sel: '#contato', label: 'Contato' },
+      { sel: '.newsletter-section', label: 'Newsletter' },
+    ];
+
+    // Available Google Fonts for dynamic loading
+    const GOOGLE_FONTS = [
+      'Inter', 'Poppins', 'Montserrat', 'Lato', 'Raleway', 'Roboto',
+      'Open Sans', 'Merriweather', 'Cormorant Garamond', 'Dancing Script', 'Great Vibes'
+    ];
+
+    // --- Section config (maps sections to their editable elements) ---
+    const SECTION_CONFIG = [
+      { id: 'promo', sel: '.promo-banner', label: 'Banner Promocional', icon: '📢', keys: [], special: 'promo' },
+      { id: 'hero', sel: '#home', label: 'Hero', icon: '🏠', keys: ['hero_badge','hero_title','hero_subtitle','hero_cta','hero_cta2','stat1_val','stat1_lbl','stat2_val','stat2_lbl','stat3_val','stat3_lbl','float_top','float_bottom'], special: 'hero', fixed: true },
+      { id: 'trust', sel: '.trust-bar', label: 'Confiança', icon: '⭐', keys: ['trust1','trust2','trust3','trust4'] },
+      { id: 'produtos', sel: '#produtos', label: 'Produtos', icon: '🛍️', keys: ['prod_label','prod_title','prod_sub'] },
+      { id: 'ofertas', sel: '#ofertas', label: 'Ofertas', icon: '🏷️', keys: ['offer_label','offer_title','offer_sub'] },
+      { id: 'depoimentos', sel: '#depoimentos', label: 'Depoimentos', icon: '💬', keys: ['test_label','test_title','test_sub'], multi: 'testimonials' },
+      { id: 'faq', sel: '#faq', label: 'FAQ', icon: '❓', keys: ['faq_label','faq_title','faq_sub'], multi: 'faq' },
+      { id: 'contato', sel: '#contato', label: 'Contato', icon: '📧', keys: ['contact_label','contact_title','contact_sub'] },
+      { id: 'newsletter', sel: '.newsletter-section', label: 'Newsletter', icon: '📰', keys: ['news_title','news_sub'] },
+      { id: 'footer', sel: '.site-footer', label: 'Footer', icon: '🦶', keys: ['footer_about','footer_h_links','footer_h_cat','footer_h_contact'], special: 'footer' },
+    ];
+
+    // Font options reusable HTML
+    const FONT_OPTIONS_HTML = `
+      <option value="">Padrão</option>
+      <option value="'Plus Jakarta Sans', sans-serif">Jakarta Sans</option>
+      <option value="'Playfair Display', serif">Playfair Display</option>
+      <option value="'Inter', sans-serif">Inter</option>
+      <option value="'Poppins', sans-serif">Poppins</option>
+      <option value="'Montserrat', sans-serif">Montserrat</option>
+      <option value="'Lato', sans-serif">Lato</option>
+      <option value="'Raleway', sans-serif">Raleway</option>
+      <option value="'Roboto', sans-serif">Roboto</option>
+      <option value="'Open Sans', sans-serif">Open Sans</option>
+      <option value="'Merriweather', serif">Merriweather</option>
+      <option value="'Cormorant Garamond', serif">Cormorant</option>
+      <option value="'Dancing Script', cursive">Dancing Script</option>
+      <option value="'Great Vibes', cursive">Great Vibes</option>`;
+
+    // --- State ---
+    let active = false;
+    let changes = {};
+    let originalHTML = {};
+    let originalStyles = {};
+    let originalOrder = [];
+    let selectedEl = null;
+    let changeCount = 0;
+    let bgAnimationEl = null;
+    let currentPanelSection = null;
+
+    // --- DOM refs ---
+    const bar = document.getElementById('edit-mode-bar');
+    const btnToggle = document.getElementById('btn-edit-mode');
+    const btnSave = document.getElementById('em-save');
+    const btnCancel = document.getElementById('em-cancel');
+    const btnReset = document.getElementById('em-reset');
+    const btnGlobal = document.getElementById('em-global-btn');
+    const panel = document.getElementById('em-section-panel');
+    const panelTitle = document.getElementById('em-panel-title');
+    const panelBody = document.getElementById('em-panel-body');
+    const panelClose = document.getElementById('em-panel-close');
+    const panelSaveBtn = document.getElementById('em-panel-save');
+    const panelBackdrop = document.getElementById('em-panel-backdrop');
+
+    if (!bar || !btnToggle) return;
+
+    // Show button for admins
+    const observer = new MutationObserver(() => {
+      const adminBtn = document.getElementById('btn-admin-panel');
+      if (adminBtn && adminBtn.style.display !== 'none') {
+        btnToggle.style.display = '';
+      }
+    });
+    const adminBtnRef = document.getElementById('btn-admin-panel');
+    if (adminBtnRef) observer.observe(adminBtnRef, { attributes: true, attributeFilter: ['style'] });
+
+    btnToggle.addEventListener('click', () => {
+      document.querySelector('.user-dropdown')?.classList.remove('show');
+      enterEditMode();
+    });
+
+    // ===================== ENTER EDIT MODE =====================
+    function enterEditMode() {
+      if (active) return;
+      active = true;
+      changes = {};
+      changeCount = 0;
+      document.body.classList.add('em-active');
+      bar.style.display = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      // Save original state
+      originalHTML = {};
+      originalStyles = {
+        bodyBg: document.body.style.background || '',
+        footerBg: '',
+        footerColor: '',
+        globalFont: '',
+        primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim(),
+        accentColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+      };
+      const footer = document.querySelector('.site-footer');
+      if (footer) {
+        originalStyles.footerBg = footer.style.background || '';
+        originalStyles.footerColor = footer.style.color || '';
+      }
+
+      getAllEditableEls().forEach(({ el, key }) => {
+        originalHTML[key] = { html: el.innerHTML, fontSize: el.style.fontSize, color: el.style.color, fontWeight: el.style.fontWeight, fontStyle: el.style.fontStyle, fontFamily: el.style.fontFamily };
+        el.setAttribute('contenteditable', 'true');
+        el.classList.add('em-editable');
+        el.addEventListener('focus', onElFocus);
+        el.addEventListener('blur', onElBlur);
+        el.addEventListener('input', onElInput);
+      });
+
+      // Save section order
+      originalOrder = getCurrentSectionOrder();
+
+      // Add section edit buttons
+      addSectionEditButtons();
+
+      // Add section reorder controls
+      addSectionControls();
+
+      // Add CRUD controls
+      addCrudControls();
+
+      // Prevent link clicks / button actions
+      document.addEventListener('click', preventActions, true);
+    }
+
+    // ===================== EXIT EDIT MODE =====================
+    function exitEditMode(revert) {
+      if (!active) return;
+      active = false;
+      closeSectionPanel();
+      document.body.classList.remove('em-active');
+      bar.style.display = 'none';
+      selectedEl = null;
+      currentPanelSection = null;
+
+      getAllEditableEls().forEach(({ el }) => {
+        el.removeAttribute('contenteditable');
+        el.classList.remove('em-editable', 'em-selected');
+        el.removeEventListener('focus', onElFocus);
+        el.removeEventListener('blur', onElBlur);
+        el.removeEventListener('input', onElInput);
+      });
+
+      if (revert) {
+        // Revert text content
+        Object.keys(originalHTML).forEach(key => {
+          const info = findByKey(key);
+          if (!info || !info.el) return;
+          const orig = originalHTML[key];
+          info.el.innerHTML = orig.html;
+          info.el.style.fontSize = orig.fontSize || '';
+          info.el.style.color = orig.color || '';
+          info.el.style.fontWeight = orig.fontWeight || '';
+          info.el.style.fontStyle = orig.fontStyle || '';
+          info.el.style.fontFamily = orig.fontFamily || '';
+        });
+        // Revert global styles
+        document.body.style.background = originalStyles.bodyBg;
+        document.body.style.fontFamily = '';
+        const footer = document.querySelector('.site-footer');
+        if (footer) {
+          footer.style.background = originalStyles.footerBg;
+          footer.style.color = originalStyles.footerColor;
+        }
+        document.documentElement.style.setProperty('--primary', originalStyles.primaryColor);
+        document.documentElement.style.setProperty('--accent', originalStyles.accentColor);
+        // Revert section order
+        revertSectionOrder();
+        // Remove animation
+        removeBgAnimation();
+      }
+
+      removeSectionEditButtons();
+      removeSectionControls();
+      removeCrudControls();
+      document.removeEventListener('click', preventActions, true);
+    }
+
+    // ===================== SAVE =====================
+    async function saveChanges(shouldExit = true) {
+      btnSave.disabled = true;
+      btnSave.textContent = 'Salvando...';
+
+      try {
+        const content = {};
+        getAllEditableEls().forEach(({ el, key }) => {
+          content[key] = {
+            html: el.innerHTML,
+            text: el.textContent.trim(),
+            fontSize: el.style.fontSize || '',
+            color: el.style.color || '',
+            fontWeight: el.style.fontWeight || '',
+            fontStyle: el.style.fontStyle || '',
+            fontFamily: el.style.fontFamily || '',
+          };
+        });
+
+        // Section order by selector
+        const sectionOrder = getCurrentSectionOrder();
+
+        // Get current bg animation value from the global panel or existing state
+        let currentAnimation = 'none';
+        const animSelect = document.getElementById('em-g-animation');
+        if (animSelect) currentAnimation = animSelect.value;
+        else if (bgAnimationEl) {
+          const cls = bgAnimationEl.className;
+          const match = cls.match(/em-bg-anim--(\S+)/);
+          if (match) currentAnimation = match[1];
+        }
+
+        // Global styles
+        const globalStyles = {
+          bodyBg: document.body.style.background || '',
+          globalFont: document.body.style.fontFamily || '',
+          footerBg: document.querySelector('.site-footer')?.style.background || '',
+          footerColor: document.querySelector('.site-footer')?.style.color || '',
+          primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim(),
+          accentColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+          bgAnimation: currentAnimation,
+        };
+
+        const payload = { content, sectionOrder, globalStyles, savedAt: new Date().toISOString() };
+        await supabase.upsertSiteSetting('edit_mode', payload);
+
+        if (shouldExit) {
+          showNotification('Alterações salvas com sucesso!');
+          exitEditMode(false);
+        }
+      } catch (err) {
+        showNotification('Erro ao salvar: ' + (err.message || ''), true);
+        throw err;
+      } finally {
+        btnSave.disabled = false;
+        btnSave.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Salvar Tudo';
+      }
+    }
+
+    // ===================== APPLY ON PAGE LOAD =====================
+    function applyEditModeSettings(settings) {
+      const editData = settings.edit_mode;
+      if (!editData) return;
+
+      const { content, sectionOrder, globalStyles } = editData;
+
+      // Apply content
+      if (content) {
+        Object.keys(content).forEach(key => {
+          const info = findByKey(key);
+          if (!info || !info.el) return;
+          const data = content[key];
+          if (data.html) info.el.innerHTML = data.html;
+          if (data.fontSize) info.el.style.fontSize = data.fontSize;
+          if (data.color) info.el.style.color = data.color;
+          if (data.fontWeight) info.el.style.fontWeight = data.fontWeight;
+          if (data.fontStyle) info.el.style.fontStyle = data.fontStyle;
+          if (data.fontFamily) {
+            info.el.style.fontFamily = data.fontFamily;
+            loadGoogleFont(data.fontFamily);
+          }
+        });
+      }
+
+      // Apply section order
+      if (sectionOrder && sectionOrder.length) {
+        applySectionOrder(sectionOrder);
+      }
+
+      // Apply global styles
+      if (globalStyles) {
+        if (globalStyles.bodyBg) document.body.style.background = globalStyles.bodyBg;
+        if (globalStyles.globalFont) {
+          document.body.style.fontFamily = globalStyles.globalFont;
+          loadGoogleFont(globalStyles.globalFont);
+        }
+        const footer = document.querySelector('.site-footer');
+        if (footer) {
+          if (globalStyles.footerBg) footer.style.background = globalStyles.footerBg;
+          if (globalStyles.footerColor) footer.style.color = globalStyles.footerColor;
+        }
+        if (globalStyles.primaryColor) document.documentElement.style.setProperty('--primary', globalStyles.primaryColor);
+        if (globalStyles.accentColor) document.documentElement.style.setProperty('--accent', globalStyles.accentColor);
+        if (globalStyles.bgAnimation && globalStyles.bgAnimation !== 'none') {
+          createBgAnimation(globalStyles.bgAnimation);
+        }
+      }
+    }
+
+    window._applyEditModeFromSettings = applyEditModeSettings;
+
+    // ===================== ELEMENT EVENT HANDLERS =====================
+    function onElFocus(e) {
+      if (selectedEl) selectedEl.classList.remove('em-selected');
+      selectedEl = e.target;
+      selectedEl.classList.add('em-selected');
+    }
+
+    function onElBlur() {
+      // keep selected state
+    }
+
+    function onElInput(e) {
+      const key = e.target.dataset.emKey;
+      if (key) { changes[key] = true; changeCount = Object.keys(changes).length; }
+    }
+
+    function preventActions(e) {
+      const target = e.target;
+      if (target.closest('.em-bar') || target.closest('.em-section-ctrl')) return;
+      if (target.closest('.em-section-edit-btn') || target.closest('.em-section-panel') || target.closest('.em-panel-backdrop')) return;
+      if (target.closest('.em-crud-bar') || target.closest('.em-crud-item-actions') || target.closest('.em-crud-overlay')) return;
+      if (target.closest('.em-hero-img-overlay') || target.closest('.em-promo-overlay')) return;
+      if (target.closest('.em-editable')) {
+        if (target.closest('a') || target.closest('button')) { e.preventDefault(); e.stopPropagation(); }
+        return;
+      }
+      if (target.closest('a[href]') || target.closest('button')) { e.preventDefault(); e.stopPropagation(); }
+    }
+
+    // ===================== SECTION EDIT BUTTONS =====================
+    function addSectionEditButtons() {
+      SECTION_CONFIG.forEach(cfg => {
+        const section = document.querySelector(cfg.sel);
+        if (!section) return;
+        section.style.position = 'relative';
+        const btn = document.createElement('button');
+        btn.className = 'em-section-edit-btn';
+        btn.dataset.sectionId = cfg.id;
+        btn.innerHTML = `
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+          ${cfg.icon} Editar ${cfg.label}`;
+        btn.addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          openSectionPanel(cfg.id);
+        });
+        section.appendChild(btn);
+      });
+    }
+
+    function removeSectionEditButtons() {
+      document.querySelectorAll('.em-section-edit-btn').forEach(b => b.remove());
+    }
+
+    // ===================== SECTION PANEL =====================
+    function openSectionPanel(sectionId) {
+      const cfg = SECTION_CONFIG.find(c => c.id === sectionId);
+      if (!cfg) return;
+      currentPanelSection = sectionId;
+      panelTitle.textContent = cfg.icon + ' Editar ' + cfg.label;
+      panelBody.innerHTML = '';
+
+      buildPanelContent(cfg);
+
+      panel.style.display = '';
+      panelBackdrop.style.display = '';
+      requestAnimationFrame(() => {
+        panel.classList.add('em-panel--open');
+        panelBackdrop.classList.add('em-panel-backdrop--open');
+      });
+
+      // Highlight section
+      const sectionEl = document.querySelector(cfg.sel);
+      document.querySelectorAll('.em-section-highlight').forEach(el => el.classList.remove('em-section-highlight'));
+      if (sectionEl) {
+        sectionEl.classList.add('em-section-highlight');
+        sectionEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    function closeSectionPanel() {
+      panel.classList.remove('em-panel--open');
+      panelBackdrop.classList.remove('em-panel-backdrop--open');
+      document.querySelectorAll('.em-section-highlight').forEach(el => el.classList.remove('em-section-highlight'));
+      setTimeout(() => {
+        panel.style.display = 'none';
+        panelBackdrop.style.display = 'none';
+      }, 300);
+      currentPanelSection = null;
+    }
+
+    function buildPanelContent(cfg) {
+      const allEls = getAllEditableEls();
+      const sectionEls = allEls.filter(e => cfg.keys.includes(e.key));
+
+      // Special controls at top
+      if (cfg.special === 'promo') buildPromoPanelControls();
+      if (cfg.special === 'hero') buildHeroImagePanelControls();
+      if (cfg.special === 'footer') buildFooterPanelControls();
+
+      // Editable elements list
+      if (sectionEls.length > 0 || cfg.multi) {
+        const sec = document.createElement('div');
+        sec.className = 'em-panel-section';
+        sec.innerHTML = '<h4 class="em-panel-section-title">Textos Editáveis</h4>';
+
+        sectionEls.forEach(({ el, key, label }) => {
+          sec.appendChild(buildElementItem(el, key, label, sec));
+        });
+
+        // Multi-editable (FAQ items, testimonials)
+        if (cfg.multi === 'faq') {
+          const multiCfg = MULTI_EDITABLE[0];
+          const parents = document.querySelectorAll(multiCfg.parentSel);
+          parents.forEach((parent, pi) => {
+            multiCfg.children.forEach(child => {
+              const el = parent.querySelector(child.sel);
+              if (!el) return;
+              const key = child.keyBase + '_' + pi;
+              sec.appendChild(buildElementItem(el, key, child.label + ' ' + (pi + 1), sec));
+            });
+          });
+        }
+        if (cfg.multi === 'testimonials') {
+          const multiCfg = MULTI_EDITABLE[1];
+          const parents = document.querySelectorAll(multiCfg.parentSel);
+          parents.forEach((parent, pi) => {
+            multiCfg.children.forEach(child => {
+              const el = parent.querySelector(child.sel);
+              if (!el) return;
+              const key = child.keyBase + '_' + pi;
+              sec.appendChild(buildElementItem(el, key, child.label + ' ' + (pi + 1), sec));
+            });
+          });
+        }
+
+        panelBody.appendChild(sec);
+      }
+    }
+
+    function buildElementItem(el, key, label, container) {
+      const item = document.createElement('div');
+      item.className = 'em-panel-elem-item';
+      item.dataset.emKey = key;
+
+      const preview = el.textContent.trim().substring(0, 40) + (el.textContent.trim().length > 40 ? '...' : '');
+      const cs = getComputedStyle(el);
+      const currentSize = Math.round(parseFloat(cs.fontSize));
+      const currentColor = rgbToHex(cs.color);
+      const currentFont = el.style.fontFamily || '';
+
+      item.innerHTML = `
+        <div class="em-panel-elem-header">
+          <span class="em-panel-elem-label">${label}</span>
+          <span class="em-panel-elem-preview">${preview}</span>
+        </div>
+        <div class="em-panel-elem-tools" style="display:none;">
+          <div class="em-panel-tool-row">
+            <label>Tamanho</label>
+            <input type="range" class="em-panel-range" min="10" max="72" value="${currentSize}" data-tool="fontSize">
+            <span class="em-panel-range-val">${currentSize}px</span>
+          </div>
+          <div class="em-panel-tool-row">
+            <label>Cor</label>
+            <input type="color" class="em-panel-color" value="${currentColor}" data-tool="color">
+          </div>
+          <div class="em-panel-tool-row">
+            <label>Fonte</label>
+            <select class="em-panel-select" data-tool="fontFamily">${FONT_OPTIONS_HTML}</select>
+          </div>
+          <div class="em-panel-tool-row em-panel-tool-row--btns">
+            <button class="em-panel-tool-btn" data-tool="bold" title="Negrito"><strong>B</strong></button>
+            <button class="em-panel-tool-btn" data-tool="italic" title="Itálico"><em>I</em></button>
+            <button class="em-panel-tool-btn em-panel-tool-btn--reset" data-tool="reset" title="Resetar este elemento">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg>
+            </button>
+          </div>
+        </div>
+      `;
+
+      // Sync font select with current element
+      const fontSelect = item.querySelector('[data-tool="fontFamily"]');
+      if (fontSelect && currentFont) {
+        for (const opt of fontSelect.options) {
+          if (opt.value && currentFont.includes(opt.value.split(',')[0].replace(/'/g, ''))) {
+            fontSelect.value = opt.value; break;
+          }
+        }
+      }
+
+      // Header toggle
+      const header = item.querySelector('.em-panel-elem-header');
+      const tools = item.querySelector('.em-panel-elem-tools');
+      header.addEventListener('click', () => {
+        container.querySelectorAll('.em-panel-elem-tools').forEach(t => { if (t !== tools) t.style.display = 'none'; });
+        container.querySelectorAll('.em-panel-elem-item').forEach(it => { if (it !== item) it.classList.remove('em-panel-elem-item--active'); });
+        const isOpen = tools.style.display !== 'none';
+        tools.style.display = isOpen ? 'none' : '';
+        item.classList.toggle('em-panel-elem-item--active', !isOpen);
+        if (!isOpen) {
+          selectElement(el);
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+
+      // Tool handlers
+      setupPanelToolHandlers(item, el);
+      return item;
+    }
+
+    function setupPanelToolHandlers(item, el) {
+      const rangeInput = item.querySelector('[data-tool="fontSize"]');
+      const rangeVal = item.querySelector('.em-panel-range-val');
+      const colorInput = item.querySelector('[data-tool="color"]');
+      const fontSelect = item.querySelector('[data-tool="fontFamily"]');
+      const boldBtn = item.querySelector('[data-tool="bold"]');
+      const italicBtn = item.querySelector('[data-tool="italic"]');
+
+      rangeInput?.addEventListener('input', () => {
+        el.style.fontSize = rangeInput.value + 'px';
+        rangeVal.textContent = rangeInput.value + 'px';
+        markChanged(el);
+      });
+      colorInput?.addEventListener('input', () => {
+        el.style.color = colorInput.value;
+        markChanged(el);
+      });
+      fontSelect?.addEventListener('change', () => {
+        el.style.fontFamily = fontSelect.value;
+        if (fontSelect.value) loadGoogleFont(fontSelect.value);
+        markChanged(el);
+      });
+      boldBtn?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const isBold = getComputedStyle(el).fontWeight >= 700;
+        el.style.fontWeight = isBold ? '400' : '700';
+        markChanged(el);
+      });
+      italicBtn?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const isItalic = getComputedStyle(el).fontStyle === 'italic';
+        el.style.fontStyle = isItalic ? 'normal' : 'italic';
+        markChanged(el);
+      });
+
+      const resetBtn = item.querySelector('[data-tool="reset"]');
+      resetBtn?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const key = item.dataset.emKey;
+        // Reset styles to defaults (remove all inline styles)
+        el.style.fontSize = '';
+        el.style.color = '';
+        el.style.fontWeight = '';
+        el.style.fontStyle = '';
+        el.style.fontFamily = '';
+        // Reset HTML to original if available
+        if (originalHTML[key]) {
+          el.innerHTML = originalHTML[key].html;
+        }
+        // Update panel controls
+        const cs = getComputedStyle(el);
+        const sz = Math.round(parseFloat(cs.fontSize));
+        if (rangeInput) { rangeInput.value = sz; rangeVal.textContent = sz + 'px'; }
+        if (colorInput) colorInput.value = rgbToHex(cs.color);
+        if (fontSelect) fontSelect.value = '';
+        markChanged(el);
+        showNotification('Elemento resetado ao padrão');
+      });
+    }
+
+    function selectElement(el) {
+      if (selectedEl) selectedEl.classList.remove('em-selected');
+      selectedEl = el;
+      el.classList.add('em-selected');
+      el.focus();
+    }
+
+    // ===================== SPECIAL PANEL BUILDERS =====================
+    function buildPromoPanelControls() {
+      const banner = document.querySelector('.promo-banner');
+      const promoText = document.getElementById('promo-text');
+      if (!banner) return;
+      const isVisible = banner.style.display !== 'none';
+      const sec = document.createElement('div');
+      sec.className = 'em-panel-section';
+      sec.innerHTML = `
+        <h4 class="em-panel-section-title">Configurações do Banner</h4>
+        <div class="em-panel-special">
+          <div class="em-panel-tool-row">
+            <label>Ativo</label>
+            <label class="em-panel-check-label"><input type="checkbox" id="em-p-promo-active" ${isVisible ? 'checked' : ''}> Banner visível</label>
+          </div>
+          <div class="em-panel-tool-row" style="margin-top:8px;">
+            <label>Texto</label>
+            <input type="text" id="em-p-promo-text" class="em-panel-select" style="flex:1;" value="${promoText?.textContent?.trim() || ''}" placeholder="Texto do banner">
+          </div>
+        </div>`;
+      panelBody.appendChild(sec);
+
+      document.getElementById('em-p-promo-active')?.addEventListener('change', async (e) => {
+        const active = e.target.checked;
+        banner.style.display = active ? '' : 'none';
+        const text = document.getElementById('em-p-promo-text')?.value || promoText?.textContent?.trim() || '';
+        try {
+          await supabase.upsertSiteSetting('promo_banner', { active, text });
+          showNotification(active ? 'Banner ativado!' : 'Banner desativado!');
+          markGlobalChanged('promo');
+        } catch (err) { showNotification('Erro: ' + (err.message || ''), true); }
+      });
+      document.getElementById('em-p-promo-text')?.addEventListener('change', async (e) => {
+        const text = e.target.value;
+        const isActive = document.getElementById('em-p-promo-active')?.checked;
+        if (promoText) promoText.textContent = text;
+        try {
+          await supabase.upsertSiteSetting('promo_banner', { active: isActive, text });
+          showNotification('Banner atualizado!');
+          markGlobalChanged('promo');
+        } catch (err) { showNotification('Erro: ' + (err.message || ''), true); }
+      });
+    }
+
+    function buildHeroImagePanelControls() {
+      const heroImg = document.getElementById('hero-image');
+      const sec = document.createElement('div');
+      sec.className = 'em-panel-section';
+      sec.innerHTML = `
+        <h4 class="em-panel-section-title">Imagem do Hero</h4>
+        <div class="em-panel-special">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="em-panel-tool-btn" id="em-p-hero-upload" style="width:auto;padding:6px 14px;gap:6px;height:auto;">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              Alterar Imagem
+            </button>
+            <button class="em-panel-tool-btn" id="em-p-hero-remove" style="width:auto;padding:6px 14px;height:auto;color:#f87171;">
+              Remover
+            </button>
+            <input type="file" id="em-p-hero-file" accept="image/*" style="display:none">
+          </div>
+          ${heroImg?.src ? '<img src="'+heroImg.src+'" style="width:100%;border-radius:8px;margin-top:10px;max-height:150px;object-fit:cover;">' : ''}
+        </div>`;
+      panelBody.appendChild(sec);
+
+      document.getElementById('em-p-hero-upload')?.addEventListener('click', () => {
+        document.getElementById('em-p-hero-file')?.click();
+      });
+      document.getElementById('em-p-hero-file')?.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 5 * 1024 * 1024) { showNotification('Imagem muito grande (máx. 5MB)', true); return; }
+        const btn = document.getElementById('em-p-hero-upload');
+        btn.textContent = 'Enviando...'; btn.disabled = true;
+        try {
+          const url = await supabase.uploadImage(file);
+          await supabase.upsertSiteSetting('hero_image', { url });
+          if (heroImg) { heroImg.src = url; heroImg.style.display = ''; }
+          const placeholder = document.getElementById('hero-image-placeholder');
+          if (placeholder) placeholder.style.display = 'none';
+          showNotification('Imagem do hero atualizada!');
+          markGlobalChanged('heroImg');
+        } catch (err) { showNotification('Erro: ' + (err.message || ''), true); }
+        finally { btn.textContent = 'Alterar Imagem'; btn.disabled = false; e.target.value = ''; }
+      });
+      document.getElementById('em-p-hero-remove')?.addEventListener('click', async () => {
+        if (!confirm('Remover a imagem do hero?')) return;
+        try {
+          await supabase.upsertSiteSetting('hero_image', { url: '' });
+          if (heroImg) { heroImg.src = ''; heroImg.style.display = 'none'; }
+          const placeholder = document.getElementById('hero-image-placeholder');
+          if (placeholder) placeholder.style.display = '';
+          showNotification('Imagem removida!');
+          markGlobalChanged('heroImg');
+        } catch (err) { showNotification('Erro: ' + (err.message || ''), true); }
+      });
+    }
+
+    function buildFooterPanelControls() {
+      const footer = document.querySelector('.site-footer');
+      if (!footer) return;
+      const cs = getComputedStyle(footer);
+      const sec = document.createElement('div');
+      sec.className = 'em-panel-section';
+      sec.innerHTML = `
+        <h4 class="em-panel-section-title">Cores do Footer</h4>
+        <div class="em-panel-special">
+          <div class="em-panel-tool-row">
+            <label>Fundo</label>
+            <input type="color" class="em-panel-color" id="em-p-footer-bg" value="${rgbToHex(cs.backgroundColor)}">
+          </div>
+          <div class="em-panel-tool-row">
+            <label>Texto</label>
+            <input type="color" class="em-panel-color" id="em-p-footer-color" value="${rgbToHex(cs.color)}">
+          </div>
+        </div>`;
+      panelBody.appendChild(sec);
+
+      document.getElementById('em-p-footer-bg')?.addEventListener('input', (e) => {
+        footer.style.background = e.target.value;
+        markGlobalChanged('footer');
+      });
+      document.getElementById('em-p-footer-color')?.addEventListener('input', (e) => {
+        footer.style.color = e.target.value;
+        markGlobalChanged('footer');
+      });
+    }
+
+    // ===================== GLOBAL SETTINGS PANEL =====================
+    function openGlobalPanel() {
+      currentPanelSection = 'global';
+      panelTitle.textContent = '⚙ Configurações Globais';
+      panelBody.innerHTML = '';
+
+      const cs = getComputedStyle(document.body);
+      const rootCs = getComputedStyle(document.documentElement);
+      const currentBg = rgbToHex(cs.backgroundColor || '#FDF9F8');
+      const currentBg2 = rgbToHex(rootCs.getPropertyValue('--bg-alt').trim() || '#F9F3F0');
+      const currentPrimary = rgbToHex(rootCs.getPropertyValue('--primary').trim() || '#C4879A');
+      const currentAccent = rgbToHex(rootCs.getPropertyValue('--accent').trim() || '#8B5A2B');
+      const currentAnim = bgAnimationEl ? (bgAnimationEl.className.match(/em-bg-anim--(\S+)/)?.[1] || 'none') : 'none';
+
+      panelBody.innerHTML = `
+        <div class="em-panel-section">
+          <h4 class="em-panel-section-title">🎨 Cores do Site</h4>
+          <div class="em-panel-tool-row">
+            <label>Fundo</label>
+            <input type="color" class="em-panel-color" id="em-g-bg-color" value="${currentBg}">
+          </div>
+          <div class="em-panel-tool-row">
+            <label>Fundo 2</label>
+            <input type="color" class="em-panel-color" id="em-g-bg-color2" value="${currentBg2}">
+          </div>
+          <div class="em-panel-tool-row">
+            <label class="em-panel-check-label"><input type="checkbox" id="em-g-bg-gradient"> Usar Degradê</label>
+          </div>
+          <div class="em-panel-tool-row">
+            <label>Primária</label>
+            <input type="color" class="em-panel-color" id="em-g-primary" value="${currentPrimary}">
+          </div>
+          <div class="em-panel-tool-row">
+            <label>Destaque</label>
+            <input type="color" class="em-panel-color" id="em-g-accent" value="${currentAccent}">
+          </div>
+        </div>
+        <div class="em-panel-section">
+          <h4 class="em-panel-section-title">🔤 Tipografia</h4>
+          <div class="em-panel-tool-row">
+            <label>Fonte</label>
+            <select class="em-panel-select" id="em-g-font">${FONT_OPTIONS_HTML}</select>
+          </div>
+        </div>
+        <div class="em-panel-section">
+          <h4 class="em-panel-section-title">✨ Animação de Fundo</h4>
+          <div class="em-panel-tool-row">
+            <label>Tipo</label>
+            <select class="em-panel-select" id="em-g-animation">
+              <option value="none" ${currentAnim==='none'?'selected':''}>Nenhuma</option>
+              <option value="particles" ${currentAnim==='particles'?'selected':''}>Partículas</option>
+              <option value="gradient-flow" ${currentAnim==='gradient-flow'?'selected':''}>Degradê Fluido</option>
+              <option value="sparkles" ${currentAnim==='sparkles'?'selected':''}>Brilhos</option>
+              <option value="bubbles" ${currentAnim==='bubbles'?'selected':''}>Bolhas</option>
+              <option value="waves" ${currentAnim==='waves'?'selected':''}>Ondas</option>
+            </select>
+          </div>
+        </div>
+      `;
+
+      // Sync font select
+      const globalFontSel = document.getElementById('em-g-font');
+      const curFont = document.body.style.fontFamily || '';
+      if (globalFontSel && curFont) {
+        for (const opt of globalFontSel.options) {
+          if (opt.value && curFont.includes(opt.value.split(',')[0].replace(/'/g, ''))) {
+            globalFontSel.value = opt.value; break;
+          }
+        }
+      }
+
+      // Event handlers
+      document.getElementById('em-g-bg-color')?.addEventListener('input', () => applyGlobalBg());
+      document.getElementById('em-g-bg-color2')?.addEventListener('input', () => applyGlobalBg());
+      document.getElementById('em-g-bg-gradient')?.addEventListener('change', () => applyGlobalBg());
+      document.getElementById('em-g-primary')?.addEventListener('input', (e) => {
+        const hex = e.target.value;
+        document.documentElement.style.setProperty('--primary', hex);
+        document.documentElement.style.setProperty('--primary-mid', adjustBrightness(hex, -15));
+        document.documentElement.style.setProperty('--primary-light', adjustBrightness(hex, 30));
+        document.documentElement.style.setProperty('--primary-soft', adjustBrightness(hex, 50));
+        document.documentElement.style.setProperty('--primary-pale', adjustBrightness(hex, 70));
+        markGlobalChanged('primary');
+      });
+      document.getElementById('em-g-accent')?.addEventListener('input', (e) => {
+        document.documentElement.style.setProperty('--accent', e.target.value);
+        document.documentElement.style.setProperty('--accent-light', adjustBrightness(e.target.value, 20));
+        markGlobalChanged('accent');
+      });
+      document.getElementById('em-g-font')?.addEventListener('change', (e) => {
+        document.body.style.fontFamily = e.target.value || '';
+        if (e.target.value) loadGoogleFont(e.target.value);
+        markGlobalChanged('font');
+      });
+      document.getElementById('em-g-animation')?.addEventListener('change', (e) => {
+        removeBgAnimation();
+        if (e.target.value !== 'none') createBgAnimation(e.target.value);
+        markGlobalChanged('animation');
+      });
+
+      // Show panel
+      panel.style.display = '';
+      panelBackdrop.style.display = '';
+      requestAnimationFrame(() => {
+        panel.classList.add('em-panel--open');
+        panelBackdrop.classList.add('em-panel-backdrop--open');
+      });
+      document.querySelectorAll('.em-section-highlight').forEach(el => el.classList.remove('em-section-highlight'));
+    }
+
+    function applyGlobalBg() {
+      const c1 = document.getElementById('em-g-bg-color')?.value;
+      const c2 = document.getElementById('em-g-bg-color2')?.value;
+      const grad = document.getElementById('em-g-bg-gradient')?.checked;
+      if (grad && c1 && c2) {
+        document.body.style.background = `linear-gradient(180deg, ${c1} 0%, ${c2} 100%)`;
+      } else if (c1) {
+        document.body.style.background = c1;
+      }
+      markGlobalChanged('bg');
+    }
+
+    // Panel event handlers
+    panelClose?.addEventListener('click', closeSectionPanel);
+    panelBackdrop?.addEventListener('click', closeSectionPanel);
+    panelSaveBtn?.addEventListener('click', async () => {
+      panelSaveBtn.disabled = true;
+      panelSaveBtn.textContent = 'Salvando...';
+      try {
+        await saveChanges(false);
+        showNotification('Seção salva com sucesso!');
+      } catch (err) {
+        showNotification('Erro ao salvar: ' + (err.message || ''), true);
+      } finally {
+        panelSaveBtn.disabled = false;
+        panelSaveBtn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Salvar Seção';
+      }
+    });
+    btnGlobal?.addEventListener('click', () => openGlobalPanel());
+    btnSave?.addEventListener('click', () => saveChanges(true));
+    btnCancel?.addEventListener('click', () => exitEditMode(true));
+    btnReset?.addEventListener('click', async () => {
+      if (!confirm('Resetar TODAS as edições visuais ao padrão original?\nIsso remove cores, fontes, tamanhos e animações customizados.')) return;
+      btnReset.disabled = true;
+      btnReset.textContent = 'Resetando...';
+      try {
+        // Clear edit_mode setting in DB
+        await supabase.upsertSiteSetting('edit_mode', null);
+        showNotification('Resetado ao padrão! Recarregando...');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        showNotification('Erro ao resetar: ' + (err.message || ''), true);
+        btnReset.disabled = false;
+        btnReset.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg> Resetar';
+      }
+    });
+
+    function markChanged(el) {
+      const key = el?.dataset?.emKey;
+      if (key) { changes[key] = true; changeCount = Object.keys(changes).length; }
+    }
+
+    function markGlobalChanged(name) {
+      changes['_global_' + name] = true;
+      changeCount = Object.keys(changes).length;
+    }
+
+    // ===================== SECTION REORDER (FIXED) =====================
+    function getCurrentSectionOrder() {
+      // Get sections in their current DOM order
+      const result = [];
+      SECTION_SELS.forEach(s => {
+        const el = document.querySelector(s.sel);
+        if (el) result.push({ sel: s.sel, label: s.label, fixed: !!s.fixed });
+      });
+      // Sort by actual DOM position
+      result.sort((a, b) => {
+        const elA = document.querySelector(a.sel);
+        const elB = document.querySelector(b.sel);
+        if (!elA || !elB) return 0;
+        return elA.compareDocumentPosition(elB) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+      });
+      return result;
+    }
+
+    function getLiveSections() {
+      // Return section elements in current DOM order
+      const all = SECTION_SELS.map(s => document.querySelector(s.sel)).filter(Boolean);
+      all.sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+      return all;
+    }
+
+    function getSectionInfo(el) {
+      for (const s of SECTION_SELS) {
+        if (el.matches(s.sel) || el.id === s.sel.replace('#', '') || el.matches(s.sel)) return s;
+      }
+      return null;
+    }
+
+    function addSectionControls() {
+      const sections = getLiveSections();
+      sections.forEach((el, i) => {
+        const info = getSectionInfo(el);
+        if (!info || info.fixed) return;
+        el.style.position = 'relative';
+        const ctrl = document.createElement('div');
+        ctrl.className = 'em-section-ctrl';
+        const isFirst = i <= 1; // can't go above fixed hero
+        const isLast = i >= sections.length - 1;
+        ctrl.innerHTML = `
+          <span class="em-section-label">${info.label}</span>
+          <div class="em-section-btns">
+            <button class="em-section-btn em-section-up" title="Mover para cima" ${isFirst ? 'disabled' : ''}>▲</button>
+            <button class="em-section-btn em-section-down" title="Mover para baixo" ${isLast ? 'disabled' : ''}>▼</button>
+          </div>`;
+        el.appendChild(ctrl);
+
+        ctrl.querySelector('.em-section-up')?.addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          swapSection(el, -1);
+        });
+        ctrl.querySelector('.em-section-down')?.addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          swapSection(el, 1);
+        });
+      });
+    }
+
+    function removeSectionControls() {
+      document.querySelectorAll('.em-section-ctrl').forEach(c => c.remove());
+    }
+
+    function swapSection(sectionEl, dir) {
+      // Get LIVE dom-ordered sections
+      const sections = getLiveSections();
+      const idx = sections.indexOf(sectionEl);
+      if (idx === -1) return;
+      const targetIdx = idx + dir;
+      if (targetIdx < 0 || targetIdx >= sections.length) return;
+
+      const targetEl = sections[targetIdx];
+      const targetInfo = getSectionInfo(targetEl);
+      if (targetInfo && targetInfo.fixed) return;
+
+      // True swap: put sectionEl before/after targetEl
+      const parent = sectionEl.parentElement;
+      if (dir === -1) {
+        // Move sectionEl before targetEl
+        parent.insertBefore(sectionEl, targetEl);
+      } else {
+        // Move sectionEl after targetEl — insert targetEl before sectionEl
+        parent.insertBefore(targetEl, sectionEl);
+      }
+
+      // Refresh controls with new order
+      removeSectionControls();
+      addSectionControls();
+
+      changes['_section_order'] = true;
+      changeCount = Object.keys(changes).length;
+
+      sectionEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function revertSectionOrder() {
+      if (!originalOrder.length) return;
+      const footer = document.querySelector('.site-footer');
+      const parent = footer?.parentElement;
+      if (!parent) return;
+      // Re-insert in original order before footer
+      originalOrder.forEach(info => {
+        const el = document.querySelector(info.sel);
+        if (el) parent.insertBefore(el, footer);
+      });
+    }
+
+    function applySectionOrder(order) {
+      const footer = document.querySelector('.site-footer');
+      const parent = footer?.parentElement;
+      if (!parent) return;
+      order.forEach(info => {
+        const el = document.querySelector(info.sel);
+        if (el) parent.insertBefore(el, footer);
+      });
+    }
+
+    // ===================== BACKGROUND ANIMATIONS =====================
+    function createBgAnimation(type) {
+      removeBgAnimation();
+      const container = document.createElement('div');
+      container.id = 'em-bg-anim-container';
+      container.className = 'em-bg-anim em-bg-anim--' + type;
+      container.setAttribute('aria-hidden', 'true');
+
+      switch (type) {
+        case 'particles':
+          for (let i = 0; i < 30; i++) {
+            const p = document.createElement('span');
+            p.className = 'em-particle';
+            p.style.left = Math.random() * 100 + '%';
+            p.style.top = Math.random() * 100 + '%';
+            p.style.animationDelay = Math.random() * 6 + 's';
+            p.style.animationDuration = (4 + Math.random() * 6) + 's';
+            p.style.width = p.style.height = (3 + Math.random() * 6) + 'px';
+            p.style.opacity = 0.1 + Math.random() * 0.3;
+            container.appendChild(p);
+          }
+          break;
+        case 'gradient-flow':
+          container.innerHTML = '<div class="em-gradient-blob em-gradient-blob--1"></div><div class="em-gradient-blob em-gradient-blob--2"></div><div class="em-gradient-blob em-gradient-blob--3"></div>';
+          break;
+        case 'sparkles':
+          for (let i = 0; i < 20; i++) {
+            const s = document.createElement('span');
+            s.className = 'em-sparkle';
+            s.innerHTML = '✦';
+            s.style.left = Math.random() * 100 + '%';
+            s.style.top = Math.random() * 100 + '%';
+            s.style.animationDelay = Math.random() * 5 + 's';
+            s.style.animationDuration = (2 + Math.random() * 4) + 's';
+            s.style.fontSize = (8 + Math.random() * 14) + 'px';
+            container.appendChild(s);
+          }
+          break;
+        case 'bubbles':
+          for (let i = 0; i < 15; i++) {
+            const b = document.createElement('span');
+            b.className = 'em-bubble';
+            b.style.left = Math.random() * 100 + '%';
+            b.style.animationDelay = Math.random() * 8 + 's';
+            b.style.animationDuration = (6 + Math.random() * 8) + 's';
+            b.style.width = b.style.height = (10 + Math.random() * 30) + 'px';
+            container.appendChild(b);
+          }
+          break;
+        case 'waves':
+          container.innerHTML = '<svg class="em-wave" viewBox="0 0 1440 320" preserveAspectRatio="none"><path fill="var(--primary)" fill-opacity="0.05" d="M0,192L48,186.7C96,181,192,171,288,186.7C384,203,480,245,576,250.7C672,256,768,224,864,213.3C960,203,1056,213,1152,218.7C1248,224,1344,224,1392,224L1440,224L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"/></svg><svg class="em-wave em-wave--2" viewBox="0 0 1440 320" preserveAspectRatio="none"><path fill="var(--primary)" fill-opacity="0.03" d="M0,288L48,272C96,256,192,224,288,213.3C384,203,480,213,576,234.7C672,256,768,288,864,282.7C960,277,1056,235,1152,213.3C1248,192,1344,192,1392,192L1440,192L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"/></svg>';
+          break;
+      }
+      document.body.appendChild(container);
+      bgAnimationEl = container;
+    }
+
+    function removeBgAnimation() {
+      if (bgAnimationEl) { bgAnimationEl.remove(); bgAnimationEl = null; }
+      document.getElementById('em-bg-anim-container')?.remove();
+    }
+
+    // ===================== FONT LOADING =====================
+    const loadedFonts = new Set();
+    function loadGoogleFont(fontVal) {
+      // Extract font name from CSS value like "'Poppins', sans-serif"
+      const name = fontVal.split(',')[0].replace(/'/g, '').trim();
+      if (!name || loadedFonts.has(name)) return;
+      // Skip already available fonts
+      if (name === 'Plus Jakarta Sans' || name === 'Playfair Display') return;
+      loadedFonts.add(name);
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = `https://fonts.googleapis.com/css2?family=${name.replace(/ /g, '+')}:wght@300;400;500;600;700&display=swap`;
+      document.head.appendChild(link);
+    }
+
+    // ===================== HELPERS =====================
+    function getAllEditableEls() {
+      const result = [];
+      EDITABLE_ELEMS.forEach(cfg => {
+        const el = document.querySelector(cfg.sel);
+        if (el) {
+          el.dataset.emKey = cfg.key;
+          el.dataset.emLabel = cfg.label;
+          result.push({ el, key: cfg.key, rich: cfg.rich, label: cfg.label });
+        }
+      });
+      MULTI_EDITABLE.forEach(group => {
+        const parents = document.querySelectorAll(group.parentSel);
+        parents.forEach((parent, pi) => {
+          group.children.forEach(child => {
+            const el = parent.querySelector(child.sel);
+            if (el) {
+              const key = child.keyBase + '_' + pi;
+              el.dataset.emKey = key;
+              el.dataset.emLabel = child.label;
+              result.push({ el, key, label: child.label });
+            }
+          });
+        });
+      });
+      return result;
+    }
+
+    function findByKey(key) {
+      return getAllEditableEls().find(e => e.key === key) || null;
+    }
+
+    function rgbToHex(rgb) {
+      if (!rgb) return '#000000';
+      if (rgb.startsWith('#')) return rgb.length === 4 ? '#' + rgb[1]+rgb[1]+rgb[2]+rgb[2]+rgb[3]+rgb[3] : rgb;
+      const match = rgb.match(/(\d+)/g);
+      if (!match || match.length < 3) return '#000000';
+      return '#' + match.slice(0, 3).map(c => parseInt(c).toString(16).padStart(2, '0')).join('');
+    }
+
+    function adjustBrightness(hex, percent) {
+      hex = hex.replace('#', '');
+      let r = parseInt(hex.substring(0, 2), 16);
+      let g = parseInt(hex.substring(2, 4), 16);
+      let b = parseInt(hex.substring(4, 6), 16);
+      r = Math.min(255, Math.max(0, r + Math.round(255 * percent / 100)));
+      g = Math.min(255, Math.max(0, g + Math.round(255 * percent / 100)));
+      b = Math.min(255, Math.max(0, b + Math.round(255 * percent / 100)));
+      return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+    }
+
+    function showNotification(msg, isError) {
+      const notif = document.createElement('div');
+      notif.className = 'em-notification' + (isError ? ' em-notification--error' : '');
+      notif.textContent = msg;
+      document.body.appendChild(notif);
+      requestAnimationFrame(() => notif.classList.add('show'));
+      setTimeout(() => { notif.classList.remove('show'); setTimeout(() => notif.remove(), 400); }, 3000);
+    }
+
+    // --- APPLY ON PAGE LOAD ---
+    // ===================== VISUAL CRUD MODULE =====================
+    const crudOverlay = document.getElementById('em-crud-overlay');
+    const crudForm = document.getElementById('em-crud-form');
+    const crudFields = document.getElementById('em-crud-fields');
+    const crudTitle = document.getElementById('em-crud-title');
+    const crudSaveBtn = document.getElementById('em-crud-save-btn');
+    let crudCallback = null;
+    let crudFileInput = null;
+
+    // Close modal
+    document.getElementById('em-crud-close')?.addEventListener('click', closeCrudModal);
+    document.getElementById('em-crud-cancel-btn')?.addEventListener('click', closeCrudModal);
+    crudOverlay?.addEventListener('click', (e) => { if (e.target === crudOverlay) closeCrudModal(); });
+
+    function closeCrudModal() {
+      if (crudOverlay) crudOverlay.style.display = 'none';
+      if (crudForm) crudForm.reset();
+      if (crudSaveBtn) crudSaveBtn.style.display = '';
+      crudCallback = null;
+    }
+
+    function openCrudModal(title, fields, data, onSave) {
+      if (!crudOverlay || !crudFields) return;
+      crudTitle.textContent = title;
+      crudCallback = onSave;
+      crudSaveBtn.disabled = false;
+      crudSaveBtn.textContent = 'Salvar';
+      crudFields.innerHTML = '';
+
+      fields.forEach(f => {
+        const div = document.createElement('div');
+        div.className = f.half ? 'em-crud-field' : 'em-crud-field';
+        const value = data && data[f.name] !== undefined ? data[f.name] : (f.default || '');
+
+        if (f.type === 'checkbox') {
+          div.innerHTML = `<div class="em-crud-checkbox">
+            <input type="checkbox" id="em-cf-${f.name}" name="${f.name}" ${value ? 'checked' : ''}>
+            <label for="em-cf-${f.name}">${f.label}</label>
+          </div>`;
+        } else if (f.type === 'textarea') {
+          div.innerHTML = `<label>${f.label}</label>
+            <textarea id="em-cf-${f.name}" name="${f.name}" rows="${f.rows || 3}" placeholder="${f.placeholder || ''}">${value}</textarea>`;
+        } else if (f.type === 'select') {
+          div.innerHTML = `<label>${f.label}</label>
+            <select id="em-cf-${f.name}" name="${f.name}">
+              ${f.options.map(o => `<option value="${o.value}" ${o.value == value ? 'selected' : ''}>${o.label}</option>`).join('')}
+            </select>`;
+        } else if (f.type === 'image') {
+          const previewHtml = value ? `<img src="${value}" class="em-crud-img-preview" id="em-cf-${f.name}-preview">` : '';
+          div.innerHTML = `<label>${f.label}</label>
+            <input type="text" id="em-cf-${f.name}" name="${f.name}" value="${value}" placeholder="URL da imagem">
+            ${previewHtml}
+            <div class="em-crud-img-upload-row">
+              <button type="button" class="em-crud-img-upload-btn" id="em-cf-${f.name}-upload-btn">📁 Upload Imagem</button>
+              <input type="file" id="em-cf-${f.name}-file" accept="image/*" style="display:none">
+            </div>`;
+        } else {
+          div.innerHTML = `<label>${f.label}</label>
+            <input type="${f.type || 'text'}" id="em-cf-${f.name}" name="${f.name}" value="${value}" placeholder="${f.placeholder || ''}" ${f.required ? 'required' : ''} ${f.readonly ? 'readonly' : ''} ${f.step ? `step="${f.step}"` : ''}>`;
+        }
+        crudFields.appendChild(div);
+      });
+
+      // Wrap half-width fields in rows
+      const halfFields = crudFields.querySelectorAll('.em-crud-field');
+      const halves = [];
+      fields.forEach((f, i) => {
+        if (f.half) halves.push(i);
+      });
+      for (let i = 0; i < halves.length; i += 2) {
+        if (i + 1 < halves.length) {
+          const row = document.createElement('div');
+          row.className = 'em-crud-field-row';
+          const f1 = halfFields[halves[i]];
+          const f2 = halfFields[halves[i + 1]];
+          if (f1 && f2) {
+            f1.parentNode.insertBefore(row, f1);
+            row.appendChild(f1);
+            row.appendChild(f2);
+          }
+        }
+      }
+
+      // Setup image upload listeners
+      fields.filter(f => f.type === 'image').forEach(f => {
+        const uploadBtn = document.getElementById(`em-cf-${f.name}-upload-btn`);
+        const fileInp = document.getElementById(`em-cf-${f.name}-file`);
+        const urlInp = document.getElementById(`em-cf-${f.name}`);
+        uploadBtn?.addEventListener('click', () => fileInp?.click());
+        fileInp?.addEventListener('change', async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          uploadBtn.textContent = 'Enviando...';
+          try {
+            const url = await supabase.uploadImage(file);
+            urlInp.value = url;
+            let preview = document.getElementById(`em-cf-${f.name}-preview`);
+            if (!preview) {
+              preview = document.createElement('img');
+              preview.className = 'em-crud-img-preview';
+              preview.id = `em-cf-${f.name}-preview`;
+              urlInp.parentNode.insertBefore(preview, urlInp.nextSibling);
+            }
+            preview.src = url;
+            showNotification('Imagem enviada!');
+          } catch (err) {
+            showNotification('Erro no upload: ' + err.message, true);
+          } finally {
+            uploadBtn.textContent = '📁 Upload Imagem';
+            fileInp.value = '';
+          }
+        });
+        urlInp?.addEventListener('input', () => {
+          const preview = document.getElementById(`em-cf-${f.name}-preview`);
+          if (preview) preview.src = urlInp.value;
+        });
+      });
+
+      crudOverlay.style.display = '';
+    }
+
+    // Form submission
+    crudForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!crudCallback) return;
+      crudSaveBtn.disabled = true;
+      crudSaveBtn.textContent = 'Salvando...';
+      try {
+        const formData = {};
+        crudFields.querySelectorAll('input, select, textarea').forEach(inp => {
+          if (inp.type === 'checkbox') formData[inp.name] = inp.checked;
+          else if (inp.type === 'number') formData[inp.name] = inp.value !== '' ? parseFloat(inp.value) : null;
+          else if (inp.type === 'file') { /* skip */ }
+          else formData[inp.name] = inp.value;
+        });
+        await crudCallback(formData);
+        closeCrudModal();
+      } catch (err) {
+        showNotification('Erro ao salvar: ' + (err.message || ''), true);
+      } finally {
+        crudSaveBtn.disabled = false;
+        crudSaveBtn.textContent = 'Salvar';
+      }
+    });
+
+    // ---- CRUD DATA HELPERS ----
+    let crudProducts = [];
+    let crudCategories = [];
+    let crudOffers = [];
+    let crudTestimonials = [];
+    let crudFaqItems = [];
+    let CRUD_CATEGORY_MAP = {};
+
+    async function crudLoadData() {
+      try {
+        [crudProducts, crudCategories] = await Promise.all([
+          supabase.getProducts(),
+          supabase.getCategories()
+        ]);
+        CRUD_CATEGORY_MAP = {};
+        crudCategories.filter(c => c.active !== false).forEach(c => {
+          CRUD_CATEGORY_MAP[c.slug] = c.name;
+        });
+        // Load settings-based data
+        const settings = await supabase.getSiteSettings();
+        const settingsMap = {};
+        settings.forEach(r => { settingsMap[r.key] = typeof r.value === 'string' ? JSON.parse(r.value) : r.value; });
+        const offersRow = settings.find(r => r.key === 'offers');
+        if (offersRow) {
+          crudOffers = typeof offersRow.value === 'string' ? JSON.parse(offersRow.value) : offersRow.value;
+          if (!Array.isArray(crudOffers)) crudOffers = [];
+        } else crudOffers = [];
+        crudTestimonials = settingsMap.testimonials || [];
+        crudFaqItems = settingsMap.faq_items || [];
+      } catch (e) {
+        console.error('[EditMode CRUD] Load error:', e);
+      }
+    }
+
+    // ---- SECTION CRUD CONTROLS ----
+    function addCrudControls() {
+      crudLoadData().then(() => {
+        addProductCrud();
+        addOfferCrud();
+        addTestimonialCrud();
+        addFaqCrud();
+        addCategoryCrud();
+        // Hero image and promo banner are now handled by section panels
+      });
+    }
+
+    function removeCrudControls() {
+      document.querySelectorAll('.em-crud-bar, .em-crud-item-actions, .em-hero-img-overlay, .em-promo-overlay').forEach(el => el.remove());
+      // Clean up promo text editable state
+      const promoText = document.getElementById('promo-text');
+      if (promoText) {
+        promoText.removeAttribute('contenteditable');
+        promoText.classList.remove('em-editable');
+      }
+    }
+
+    // ---- PRODUCT CRUD ----
+    function addProductCrud() {
+      const section = document.querySelector('#produtos');
+      if (!section) return;
+      section.style.position = 'relative';
+
+      const bar = document.createElement('div');
+      bar.className = 'em-crud-bar';
+      bar.innerHTML = `<span class="em-crud-bar__label">Produtos</span>
+        <button class="em-crud-fab em-crud-fab--add" id="em-crud-add-product">＋ Novo Produto</button>
+        <button class="em-crud-fab" style="background:rgba(59,130,246,0.2);color:#93c5fd;" id="em-crud-manage-cats">📂 Categorias</button>`;
+      section.appendChild(bar);
+
+      document.getElementById('em-crud-add-product')?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        openProductForm();
+      });
+      document.getElementById('em-crud-manage-cats')?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        openCategoryList();
+      });
+
+      // Add edit/delete buttons to each product card
+      document.querySelectorAll('.product-card').forEach(card => {
+        const productId = card.dataset.id;
+        if (!productId) return;
+        card.style.position = 'relative';
+        const actions = document.createElement('div');
+        actions.className = 'em-crud-item-actions';
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-product="${productId}">✏</button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-product="${productId}">🗑</button>`;
+        card.appendChild(actions);
+      });
+
+      // Delegation for edit/delete
+      section.addEventListener('click', async (e) => {
+        const editBtn = e.target.closest('[data-crud-edit-product]');
+        if (editBtn) {
+          e.preventDefault(); e.stopPropagation();
+          const p = crudProducts.find(x => x.id === editBtn.dataset.crudEditProduct);
+          if (p) openProductForm(p);
+          return;
+        }
+        const delBtn = e.target.closest('[data-crud-del-product]');
+        if (delBtn) {
+          e.preventDefault(); e.stopPropagation();
+          if (!confirm('Excluir este produto?')) return;
+          try {
+            await supabase.deleteProduct(delBtn.dataset.crudDelProduct);
+            showNotification('Produto excluído!');
+            await refreshProducts();
+          } catch (err) { showNotification('Erro ao excluir: ' + err.message, true); }
+        }
+      }, true);
+    }
+
+    function openProductForm(product = null) {
+      const catOptions = [{ value: '', label: 'Selecione' }].concat(
+        crudCategories.filter(c => c.active !== false).map(c => ({ value: c.slug, label: c.name }))
+      );
+      const fields = [
+        { name: 'name', label: 'Nome do Produto', required: true },
+        { name: 'id', label: 'ID (slug)', placeholder: 'auto-gerado', readonly: !!product },
+        { name: 'category_slug', label: 'Categoria', type: 'select', options: catOptions },
+        { name: 'price', label: 'Preço (R$)', type: 'number', step: '0.01', half: true, required: true },
+        { name: 'old_price', label: 'Preço Antigo', type: 'number', step: '0.01', half: true },
+        { name: 'badge', label: 'Badge', placeholder: 'NOVO, PROMO, etc.', half: true },
+        { name: 'stock', label: 'Estoque', type: 'number', half: true },
+        { name: 'description', label: 'Descrição', type: 'textarea' },
+        { name: 'image_url', label: 'Imagem Principal', type: 'image' },
+        { name: 'image_bg', label: 'Gradiente de Fundo', placeholder: 'linear-gradient(135deg, #f0e6f6, #d4c5e0)' },
+        { name: 'rating', label: 'Avaliação', type: 'number', step: '0.1', default: '5.0', half: true },
+        { name: 'reviews_count', label: 'Nº Avaliações', type: 'number', default: '0', half: true },
+        { name: 'sort_order', label: 'Ordem', type: 'number', default: '0', half: true },
+        { name: 'active', label: 'Ativo', type: 'checkbox', default: true, half: true },
+      ];
+
+      const data = product ? {
+        ...product,
+        active: product.active !== false,
+        stock: product.stock !== null && product.stock !== undefined ? product.stock : '',
+      } : { active: true, rating: '5.0', reviews_count: '0', sort_order: '0' };
+
+      openCrudModal(
+        product ? 'Editar Produto' : 'Novo Produto',
+        fields,
+        data,
+        async (formData) => {
+          // Auto-generate ID from name if new
+          if (!product && !formData.id) {
+            formData.id = formData.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          }
+          formData.category = CRUD_CATEGORY_MAP[formData.category_slug] || formData.category_slug || '';
+          formData.price = parseFloat(formData.price) || 0;
+          formData.old_price = formData.old_price ? parseFloat(formData.old_price) : null;
+          formData.rating = parseFloat(formData.rating) || 5.0;
+          formData.reviews_count = parseInt(formData.reviews_count) || 0;
+          formData.sort_order = parseInt(formData.sort_order) || 0;
+          formData.stock = formData.stock !== '' && formData.stock !== null ? parseInt(formData.stock) : null;
+          formData.stock_deactivated = false;
+          if (formData.stock !== null && formData.stock <= 0) {
+            formData.active = false;
+            formData.stock_deactivated = true;
+            formData.stock = 0;
+          }
+
+          if (product) {
+            const { id, ...upd } = formData;
+            await supabase.updateProduct(product.id, upd);
+            showNotification('Produto atualizado!');
+          } else {
+            await supabase.createProduct(formData);
+            showNotification('Produto criado!');
+          }
+          await refreshProducts();
+        }
+      );
+
+      // Auto-slug from name (for new products)
+      if (!product) {
+        const nameInput = document.getElementById('em-cf-name');
+        const idInput = document.getElementById('em-cf-id');
+        nameInput?.addEventListener('input', () => {
+          if (!idInput.readOnly) {
+            idInput.value = nameInput.value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          }
+        });
+      }
+    }
+
+    async function refreshProducts() {
+      crudProducts = await supabase.getProducts();
+      if (typeof loadProductsFromDB === 'function') loadProductsFromDB();
+      // Re-add CRUD item buttons after grid re-renders
+      setTimeout(() => {
+        document.querySelectorAll('.product-card .em-crud-item-actions').forEach(el => el.remove());
+        document.querySelectorAll('.product-card').forEach(card => {
+          const productId = card.dataset.id;
+          if (!productId) return;
+          card.style.position = 'relative';
+          const actions = document.createElement('div');
+          actions.className = 'em-crud-item-actions';
+          actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-product="${productId}">✏</button>
+            <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-product="${productId}">🗑</button>`;
+          card.appendChild(actions);
+        });
+      }, 800);
+    }
+
+    // ---- CATEGORY CRUD ----
+    function addCategoryCrud() {
+      // Category management is accessible from the product section bar
+    }
+
+    function openCategoryList() {
+      let listHtml = '<div style="margin-bottom:12px;">';
+      crudCategories.forEach((c, i) => {
+        const statusBadge = c.active !== false ? '🟢' : '🔴';
+        listHtml += `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="color:${c.text_color || '#8b5cf6'};font-weight:700;">${c.name}</span>
+            <small style="color:#64748b;">(${c.slug})</small>
+            <span>${statusBadge}</span>
+          </div>
+          <div style="display:flex;gap:4px;">
+            <button class="em-crud-item-btn em-crud-item-btn--edit" data-crud-edit-cat="${i}" style="width:26px;height:26px;font-size:0.65rem;">✏</button>
+            <button class="em-crud-item-btn em-crud-item-btn--delete" data-crud-del-cat="${i}" style="width:26px;height:26px;font-size:0.65rem;">🗑</button>
+          </div>
+        </div>`;
+      });
+      listHtml += '</div>';
+
+      openCrudModal('Gerenciar Categorias', [], null, null);
+      crudFields.innerHTML = listHtml + `<button type="button" class="em-crud-fab em-crud-fab--add" id="em-crud-add-cat-btn" style="width:100%;justify-content:center;margin-top:8px;">＋ Nova Categoria</button>`;
+      crudSaveBtn.style.display = 'none';
+
+      // Delegation
+      crudFields.addEventListener('click', async (e) => {
+        const editBtn = e.target.closest('[data-crud-edit-cat]');
+        if (editBtn) {
+          const cat = crudCategories[parseInt(editBtn.dataset.crudEditCat)];
+          if (cat) { closeCrudModal(); openCategoryForm(cat); }
+          return;
+        }
+        const delBtn = e.target.closest('[data-crud-del-cat]');
+        if (delBtn) {
+          const cat = crudCategories[parseInt(delBtn.dataset.crudDelCat)];
+          if (!cat || !confirm(`Excluir categoria "${cat.name}"?`)) return;
+          try {
+            await supabase.deleteCategory(cat.id);
+            showNotification('Categoria excluída!');
+            await crudLoadData();
+            closeCrudModal();
+            openCategoryList();
+          } catch (err) { showNotification('Erro: ' + err.message, true); }
+          return;
+        }
+        if (e.target.closest('#em-crud-add-cat-btn')) {
+          closeCrudModal();
+          openCategoryForm();
+        }
+      });
+
+      // ensure save btn shows again
+    }
+
+    function openCategoryForm(cat = null) {
+      const fields = [
+        { name: 'name', label: 'Nome', required: true },
+        { name: 'slug', label: 'Slug', placeholder: 'auto-gerado', readonly: !!cat },
+        { name: 'text_color', label: 'Cor', type: 'color', default: '#1e293b', half: true },
+        { name: 'sort_order', label: 'Ordem', type: 'number', default: '0', half: true },
+        { name: 'active', label: 'Ativa', type: 'checkbox', default: true },
+      ];
+      const data = cat ? { ...cat, active: cat.active !== false } : { active: true, text_color: '#1e293b', sort_order: '0' };
+
+      openCrudModal(
+        cat ? 'Editar Categoria' : 'Nova Categoria',
+        fields,
+        data,
+        async (formData) => {
+          formData.sort_order = parseInt(formData.sort_order) || 0;
+          if (cat) {
+            await supabase.updateCategory(cat.id, formData);
+            showNotification('Categoria atualizada!');
+          } else {
+            if (!formData.slug) {
+              formData.slug = formData.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            }
+            formData.id = formData.slug;
+            await supabase.createCategory(formData);
+            showNotification('Categoria criada!');
+          }
+          await crudLoadData();
+          await refreshProducts();
+        }
+      );
+
+      // Auto-slug
+      if (!cat) {
+        const nameInput = document.getElementById('em-cf-name');
+        const slugInput = document.getElementById('em-cf-slug');
+        nameInput?.addEventListener('input', () => {
+          if (!slugInput.readOnly) {
+            slugInput.value = nameInput.value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          }
+        });
+      }
+    }
+
+    // ---- OFFER CRUD ----
+    function addOfferCrud() {
+      const section = document.querySelector('#ofertas');
+      if (!section) return;
+      section.style.position = 'relative';
+
+      const bar = document.createElement('div');
+      bar.className = 'em-crud-bar';
+      bar.innerHTML = `<span class="em-crud-bar__label">Ofertas</span>
+        <button class="em-crud-fab em-crud-fab--add" id="em-crud-add-offer">＋ Nova Oferta</button>`;
+      section.appendChild(bar);
+
+      document.getElementById('em-crud-add-offer')?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        openOfferForm();
+      });
+
+      // Add edit/delete to offer cards
+      document.querySelectorAll('.offer-carousel-card').forEach(card => {
+        const idx = card.dataset.offerIdx;
+        card.style.position = 'relative';
+        const actions = document.createElement('div');
+        actions.className = 'em-crud-item-actions';
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-offer="${idx}">✏</button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-offer="${idx}">🗑</button>`;
+        card.appendChild(actions);
+      });
+
+      section.addEventListener('click', async (e) => {
+        const editBtn = e.target.closest('[data-crud-edit-offer]');
+        if (editBtn) {
+          e.preventDefault(); e.stopPropagation();
+          // Map the carousel index back to the actual offer index
+          const cardIdx = parseInt(editBtn.dataset.crudEditOffer);
+          const realIdx = cardIdx % crudOffers.length;
+          if (crudOffers[realIdx]) openOfferForm(crudOffers[realIdx], realIdx);
+          return;
+        }
+        const delBtn = e.target.closest('[data-crud-del-offer]');
+        if (delBtn) {
+          e.preventDefault(); e.stopPropagation();
+          const cardIdx = parseInt(delBtn.dataset.crudDelOffer);
+          const realIdx = cardIdx % crudOffers.length;
+          if (!confirm('Excluir esta oferta?')) return;
+          try {
+            crudOffers.splice(realIdx, 1);
+            await supabase.upsertSiteSetting('offers', crudOffers);
+            const firstActive = crudOffers.find(o => o.active !== false);
+            await supabase.upsertSiteSetting('special_offer', firstActive || { active: false });
+            showNotification('Oferta excluída!');
+            if (typeof loadSiteSettings === 'function') loadSiteSettings();
+          } catch (err) { showNotification('Erro: ' + err.message, true); }
+        }
+      }, true);
+    }
+
+    function openOfferForm(offer = null, index = -1) {
+      const productOptions = [{ value: '', label: 'Nenhum produto vinculado' }].concat(
+        crudProducts.map(p => ({ value: p.id, label: p.name }))
+      );
+      const fields = [
+        { name: 'name', label: 'Nome da Oferta', required: true },
+        { name: 'description', label: 'Descrição', type: 'textarea' },
+        { name: 'price', label: 'Preço (R$)', type: 'number', step: '0.01', half: true, required: true },
+        { name: 'old_price', label: 'Preço Antigo', type: 'number', step: '0.01', half: true },
+        { name: 'image_url', label: 'Imagem', type: 'image' },
+        { name: 'product_id', label: 'Produto Vinculado', type: 'select', options: productOptions },
+        { name: 'active', label: 'Ativa', type: 'checkbox', default: true },
+      ];
+      const data = offer ? { ...offer, active: offer.active !== false } : { active: true };
+
+      openCrudModal(
+        offer ? 'Editar Oferta' : 'Nova Oferta',
+        fields,
+        data,
+        async (formData) => {
+          formData.price = parseFloat(formData.price) || 0;
+          formData.old_price = formData.old_price ? parseFloat(formData.old_price) : 0;
+          if (index >= 0) {
+            crudOffers[index] = formData;
+          } else {
+            crudOffers.push(formData);
+          }
+          await supabase.upsertSiteSetting('offers', crudOffers);
+          const firstActive = crudOffers.find(o => o.active !== false);
+          await supabase.upsertSiteSetting('special_offer', firstActive || { active: false });
+          showNotification(index >= 0 ? 'Oferta atualizada!' : 'Oferta criada!');
+          if (typeof loadSiteSettings === 'function') loadSiteSettings();
+        }
+      );
+    }
+
+    // ---- TESTIMONIAL CRUD ----
+    function addTestimonialCrud() {
+      const section = document.querySelector('#depoimentos');
+      if (!section) return;
+      section.style.position = 'relative';
+
+      const bar = document.createElement('div');
+      bar.className = 'em-crud-bar';
+      bar.innerHTML = `<span class="em-crud-bar__label">Depoimentos</span>
+        <button class="em-crud-fab em-crud-fab--add" id="em-crud-add-testimonial">＋ Novo Depoimento</button>`;
+      section.appendChild(bar);
+
+      document.getElementById('em-crud-add-testimonial')?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        openTestimonialForm();
+      });
+
+      // Add edit/delete to each testimonial card
+      document.querySelectorAll('.testimonial-card').forEach((card, i) => {
+        card.style.position = 'relative';
+        const actions = document.createElement('div');
+        actions.className = 'em-crud-item-actions';
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-test="${i}">✏</button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-test="${i}">🗑</button>`;
+        card.appendChild(actions);
+      });
+
+      section.addEventListener('click', async (e) => {
+        const editBtn = e.target.closest('[data-crud-edit-test]');
+        if (editBtn) {
+          e.preventDefault(); e.stopPropagation();
+          const idx = parseInt(editBtn.dataset.crudEditTest);
+          if (crudTestimonials[idx]) openTestimonialForm(crudTestimonials[idx], idx);
+          return;
+        }
+        const delBtn = e.target.closest('[data-crud-del-test]');
+        if (delBtn) {
+          e.preventDefault(); e.stopPropagation();
+          const idx = parseInt(delBtn.dataset.crudDelTest);
+          if (!confirm('Excluir este depoimento?')) return;
+          try {
+            crudTestimonials.splice(idx, 1);
+            await supabase.upsertSiteSetting('testimonials', crudTestimonials);
+            showNotification('Depoimento excluído!');
+            if (typeof loadSiteSettings === 'function') loadSiteSettings();
+          } catch (err) { showNotification('Erro: ' + err.message, true); }
+        }
+      }, true);
+    }
+
+    function openTestimonialForm(testimonial = null, index = -1) {
+      const fields = [
+        { name: 'name', label: 'Nome', required: true, half: true },
+        { name: 'location', label: 'Localização', placeholder: 'São Paulo, SP', half: true },
+        { name: 'rating', label: 'Avaliação (1-5)', type: 'select', options: [
+          { value: '5', label: '★★★★★ (5)' },
+          { value: '4', label: '★★★★☆ (4)' },
+          { value: '3', label: '★★★☆☆ (3)' },
+          { value: '2', label: '★★☆☆☆ (2)' },
+          { value: '1', label: '★☆☆☆☆ (1)' },
+        ]},
+        { name: 'text', label: 'Depoimento', type: 'textarea', rows: 4, required: true },
+      ];
+      const data = testimonial || { rating: '5' };
+
+      openCrudModal(
+        testimonial ? 'Editar Depoimento' : 'Novo Depoimento',
+        fields,
+        data,
+        async (formData) => {
+          if (index >= 0) {
+            crudTestimonials[index] = formData;
+          } else {
+            crudTestimonials.push(formData);
+          }
+          await supabase.upsertSiteSetting('testimonials', crudTestimonials);
+          showNotification(index >= 0 ? 'Depoimento atualizado!' : 'Depoimento adicionado!');
+          if (typeof loadSiteSettings === 'function') loadSiteSettings();
+        }
+      );
+    }
+
+    // ---- FAQ CRUD ----
+    function addFaqCrud() {
+      const section = document.querySelector('#faq');
+      if (!section) return;
+      section.style.position = 'relative';
+
+      const bar = document.createElement('div');
+      bar.className = 'em-crud-bar';
+      bar.innerHTML = `<span class="em-crud-bar__label">FAQ</span>
+        <button class="em-crud-fab em-crud-fab--add" id="em-crud-add-faq">＋ Nova Pergunta</button>`;
+      section.appendChild(bar);
+
+      document.getElementById('em-crud-add-faq')?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        openFaqForm();
+      });
+
+      // Add edit/delete to each FAQ item
+      document.querySelectorAll('.faq-item').forEach((item, i) => {
+        item.style.position = 'relative';
+        const actions = document.createElement('div');
+        actions.className = 'em-crud-item-actions';
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-faq="${i}">✏</button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-faq="${i}">🗑</button>`;
+        item.appendChild(actions);
+      });
+
+      section.addEventListener('click', async (e) => {
+        const editBtn = e.target.closest('[data-crud-edit-faq]');
+        if (editBtn) {
+          e.preventDefault(); e.stopPropagation();
+          const idx = parseInt(editBtn.dataset.crudEditFaq);
+          if (crudFaqItems[idx]) openFaqForm(crudFaqItems[idx], idx);
+          return;
+        }
+        const delBtn = e.target.closest('[data-crud-del-faq]');
+        if (delBtn) {
+          e.preventDefault(); e.stopPropagation();
+          const idx = parseInt(delBtn.dataset.crudDelFaq);
+          if (!confirm('Excluir esta pergunta?')) return;
+          try {
+            crudFaqItems.splice(idx, 1);
+            await supabase.upsertSiteSetting('faq_items', crudFaqItems);
+            showNotification('Pergunta excluída!');
+            if (typeof loadSiteSettings === 'function') loadSiteSettings();
+          } catch (err) { showNotification('Erro: ' + err.message, true); }
+        }
+      }, true);
+    }
+
+    function openFaqForm(faqItem = null, index = -1) {
+      const fields = [
+        { name: 'question', label: 'Pergunta', required: true },
+        { name: 'answer', label: 'Resposta', type: 'textarea', rows: 4, required: true },
+      ];
+      const data = faqItem || {};
+
+      openCrudModal(
+        faqItem ? 'Editar Pergunta' : 'Nova Pergunta',
+        fields,
+        data,
+        async (formData) => {
+          if (index >= 0) {
+            crudFaqItems[index] = formData;
+          } else {
+            crudFaqItems.push(formData);
+          }
+          await supabase.upsertSiteSetting('faq_items', crudFaqItems);
+          showNotification(index >= 0 ? 'Pergunta atualizada!' : 'Pergunta adicionada!');
+          if (typeof loadSiteSettings === 'function') loadSiteSettings();
+        }
+      );
+    }
+
+    // --- APPLY ON PAGE LOAD ---
+    const _waitAndApply = setInterval(() => {
+      try {
+        const cached = localStorage.getItem('toque_settings_cache');
+        if (cached) {
+          const data = JSON.parse(cached);
+          if (data && data.settings && data.settings.edit_mode) {
+            applyEditModeSettings(data.settings);
+            clearInterval(_waitAndApply);
+          }
+        }
+      } catch (e) {}
+    }, 500);
+    setTimeout(() => clearInterval(_waitAndApply), 5000);
 
   })();
 

@@ -36,7 +36,7 @@
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600;700&family=Quicksand:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   
   <!-- Styles -->
   <link rel="stylesheet" href="styles.css">
@@ -82,7 +82,11 @@
         <!-- Gallery -->
         <div class="product-gallery">
           <div class="product-gallery-main" id="gallery-main">
-            <div class="gallery-zoom-hint">Clique para zoom</div>
+            <div class="gallery-zoom-hint">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/></svg>
+              Zoom
+            </div>
+            <div class="gallery-badge" id="gallery-badge"></div>
           </div>
           <div class="product-gallery-thumbs" id="gallery-thumbs"></div>
           <button class="gallery-nav gallery-nav--prev" id="gallery-prev" aria-label="Anterior">
@@ -91,74 +95,91 @@
           <button class="gallery-nav gallery-nav--next" id="gallery-next" aria-label="Próximo">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
           </button>
+          <div class="gallery-counter" id="gallery-counter"></div>
         </div>
         
         <!-- Info -->
         <div class="product-modal-info">
-          <p class="product-modal-category" id="modal-category"></p>
-          <h2 class="product-modal-title" id="modal-title"></h2>
-          
-          <div class="product-modal-rating">
-            <div class="stars" id="modal-stars"></div>
-            <span id="modal-rating-text"></span>
-          </div>
-          
-          <div class="product-modal-prices" id="modal-prices"></div>
-          
-          <p class="product-modal-desc" id="modal-desc"></p>
-          
-          <div class="product-modal-qty">
-            <label>Quantidade:</label>
-            <div class="qty-control">
-              <button class="qty-btn" id="qty-minus" aria-label="Diminuir">−</button>
-              <span class="qty-value" id="qty-value">1</span>
-              <button class="qty-btn" id="qty-plus" aria-label="Aumentar">+</button>
+          <div class="pm-info-scroll">
+            <div class="pm-top-row">
+              <p class="product-modal-category" id="modal-category"></p>
+              <button class="pm-wishlist-btn" id="modal-add-wishlist" aria-label="Adicionar aos favoritos">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="20" height="20">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+                </svg>
+              </button>
             </div>
-          </div>
-
-          <!-- Coupon -->
-          <div class="coupon-section">
-            <div class="coupon-input-wrap">
-              <input type="text" id="coupon-input" class="coupon-input" placeholder="Código do cupom" maxlength="20">
-              <button class="coupon-apply-btn" id="coupon-apply">APLICAR</button>
+            <h2 class="product-modal-title" id="modal-title"></h2>
+            
+            <div class="product-modal-rating">
+              <div class="stars" id="modal-stars"></div>
+              <span id="modal-rating-text"></span>
             </div>
-            <p class="coupon-msg" id="coupon-msg"></p>
-          </div>
-          
-          <div class="product-modal-actions">
-            <button class="btn btn-primary btn-lg" id="modal-add-cart">
-              ADICIONAR AO CARRINHO
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
-              </svg>
-            </button>
-            <button class="btn btn-outline btn-icon" id="modal-add-wishlist" aria-label="Adicionar aos favoritos">
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
-              </svg>
-            </button>
-            <a class="btn btn-whatsapp btn-icon" id="modal-whatsapp" target="_blank" rel="noopener" aria-label="Comprar via WhatsApp">
-              <svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-              </svg>
-            </a>
-          </div>
+            
+            <div class="product-modal-prices" id="modal-prices"></div>
 
-          <!-- Reviews -->
-          <div class="product-modal-reviews">
-            <h4>Avaliações dos Clientes</h4>
-            <div class="reviews-list" id="modal-reviews"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+            <div class="pm-installments" id="modal-installments"></div>
+            
+            <div class="pm-divider"></div>
 
-  <!-- ============================================ -->
-  <!-- CART DRAWER                                  -->
-  <!-- ============================================ -->
-  <div id="cart-drawer" class="cart-drawer">
-    <div class="cart-drawer-overlay" id="cart-drawer-overlay"></div>
+            <p class="product-modal-desc" id="modal-desc"></p>
+            
+            <div class="pm-divider"></div>
+
+            <div class="pm-purchase-section">
+              <div class="product-modal-qty">
+                <label>Quantidade</label>
+                <div class="qty-control">
+                  <button class="qty-btn" id="qty-minus" aria-label="Diminuir">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4"/></svg>
+                  </button>
+                  <span class="qty-value" id="qty-value">1</span>
+                  <button class="qty-btn" id="qty-plus" aria-label="Aumentar">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Coupon -->
+              <div class="coupon-section">
+                <div class="coupon-input-wrap">
+                  <svg class="coupon-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
+                  <input type="text" id="coupon-input" class="coupon-input" placeholder="Cupom de desconto" maxlength="20">
+                  <button class="coupon-apply-btn" id="coupon-apply">APLICAR</button>
+                </div>
+                <p class="coupon-msg" id="coupon-msg"></p>
+              </div>
+              
+              <div class="product-modal-actions">
+                <button class="pm-add-cart-btn" id="modal-add-cart">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
+                  </svg>
+                  ADICIONAR AO CARRINHO
+                </button>
+                <a class="pm-whatsapp-btn" id="modal-whatsapp" target="_blank" rel="noopener" aria-label="Comprar via WhatsApp">
+                  <svg fill="currentColor" viewBox="0 0 24 24" width="20" height="20">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 00-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                  </svg>
+                  WhatsApp
+                </a>
+              </div>
+            </div>
+
+            <!-- Reviews -->
+            <div class="product-modal-reviews">
+              <h4>
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                Avaliações dos Clientes
+              </h4>
+              <div class="reviews-list" id="modal-reviews"></div>
+            </div>
+          </div><!-- /pm-info-scroll -->
+        </div><!-- /product-modal-info -->
+      </div><!-- /product-modal-grid -->
+    </div><!-- /product-modal-content -->
+  </div><!-- /product-modal -->
+
     <div class="cart-drawer-panel">
       <div class="cart-drawer-header">
         <h3>Seu Carrinho</h3>
@@ -210,7 +231,7 @@
   <!-- ============================================ -->
   <div class="promo-banner">
     <div class="section-container">
-      <p id="promo-text" class="promo-text">&#10024; Frete grátis acima de R$199 &nbsp;&bull;&nbsp; Parcele em até 6x sem juros</p>
+      <p id="promo-text" class="promo-text">Frete grátis acima de R$199 &nbsp;&bull;&nbsp; Parcele em até 6x sem juros</p>
     </div>
   </div>
 
@@ -220,18 +241,15 @@
   <header class="site-header" id="site-header">
     <div class="header-inner">
       <a href="#home" class="logo">
-        <svg class="logo-icon" viewBox="0 0 40 40" fill="currentColor">
-          <path d="M20 5L23 15L33 15L25 22L28 33L20 26L12 33L15 22L7 15L17 15L20 5Z"/>
-        </svg>
+        <img class="logo-icon" src="logo.jpeg" alt="Toque de Fada">
         <div class="logo-text">
           <h1>Toque de Fada</h1>
-          <p>JOIAS &amp; BELEZA</p>
+          <p>BELEZA &amp; MAGIA</p>
         </div>
       </a>
 
       <nav class="desktop-nav" aria-label="Menu principal">
         <a href="#home" class="nav-link active">Home</a>
-        <a href="#categorias" class="nav-link">Categorias</a>
         <a href="#produtos" class="nav-link">Produtos</a>
         <a href="#ofertas" class="nav-link nav-link--highlight">Ofertas</a>
         <a href="#depoimentos" class="nav-link">Depoimentos</a>
@@ -272,9 +290,8 @@
 
     <nav id="mobile-menu" class="mobile-menu" aria-label="Menu mobile">
       <a href="#home">Home</a>
-      <a href="#categorias">Categorias</a>
       <a href="#produtos">Produtos</a>
-      <a href="#ofertas" style="color: var(--rose-gold);">Ofertas</a>
+      <a href="#ofertas" style="color: var(--accent); font-weight: 600;">Ofertas</a>
       <a href="#depoimentos">Depoimentos</a>
       <a href="#faq">FAQ</a>
       <a href="#contato">Contato</a>
@@ -291,13 +308,13 @@
         <div class="reveal-left">
           <div class="hero-badge">
             <span class="dot"></span>
-            NOVA COLEÇÃO 2026
+            NOVA COLEÇÃO
           </div>
           <h2 id="hero-title" class="hero-title">
-            Desperte sua <span class="highlight">magia</span> interna
+            Sua beleza, <span class="highlight">elevada.</span>
           </h2>
           <p id="hero-subtitle" class="hero-subtitle">
-            Joias em prata 925 e produtos de beleza que revelam o brilho que existe em você. Cada peça é única, assim como você.
+            Produtos de beleza selecionados com curadoria para quem valoriza qualidade, sofisticação e autenticidade.
           </p>
           <div class="hero-actions">
             <button class="btn btn-primary" onclick="document.getElementById('produtos').scrollIntoView({behavior:'smooth'})">
@@ -352,7 +369,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
               </svg>
             </div>
-            <div class="float-card-text">Prata 925 Legítima<span>Garantia vitalícia</span></div>
+            <div class="float-card-text">Envio Seguro<span>Embalagem especial</span></div>
           </div>
         </div>
       </div>
@@ -381,66 +398,86 @@
     </section>
 
     <!-- ============================================ -->
-    <!-- CATEGORIES                                   -->
-    <!-- ============================================ -->
-    <section id="categorias" class="section section--alt">
-      <div class="section-container">
-        <div class="section-header section-header--center reveal">
-          <div class="section-label">Explore</div>
-          <h3 class="section-title">Nossas Categorias</h3>
-          <p class="section-subtitle">Encontre o que combina com o seu estilo em nossas coleções cuidadosamente selecionadas.</p>
-        </div>
-        <div class="categories-grid stagger-children">
-          <div class="category-card reveal" data-filter="prata-925">
-            <div class="category-icon category-icon--prata">
-              <svg viewBox="0 0 36 36" fill="currentColor"><path d="M18 4L21 12H29L22.5 17L25 26L18 21L11 26L13.5 17L7 12H15L18 4Z" opacity="0.9"/></svg>
-            </div>
-            <h4 class="category-name">Prata 925</h4>
-            <p class="category-desc">Joias delicadas em prata pura com acabamento rose gold e brilho incomparável.</p>
-            <div class="category-link">VER COLEÇÃO <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg></div>
-          </div>
-          <div class="category-card reveal" data-filter="maquiagem">
-            <div class="category-icon category-icon--maquiagem">
-              <svg viewBox="0 0 36 36" fill="currentColor"><rect x="14" y="6" width="8" height="24" rx="4" opacity="0.9"/><circle cx="18" cy="10" r="3"/></svg>
-            </div>
-            <h4 class="category-name">Maquiagem</h4>
-            <p class="category-desc">Batons glow, sombras e blushes com pigmentação intensa e longa duração.</p>
-            <div class="category-link">VER COLEÇÃO <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg></div>
-          </div>
-          <div class="category-card reveal" data-filter="cosmeticos">
-            <div class="category-icon category-icon--cosmeticos">
-              <svg viewBox="0 0 36 36" fill="currentColor"><ellipse cx="18" cy="24" rx="10" ry="4" opacity="0.7"/><rect x="12" y="12" width="12" height="14" rx="3" opacity="0.9"/><rect x="15" y="8" width="6" height="6" rx="3"/></svg>
-            </div>
-            <h4 class="category-name">Cosméticos</h4>
-            <p class="category-desc">Cuidados glow com ingredientes premium e fórmulas exclusivas para sua pele.</p>
-            <div class="category-link">VER COLEÇÃO <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================ -->
-    <!-- PRODUCTS (with filters)                      -->
+    <!-- PRODUCTS (with categories + filters)         -->
     <!-- ============================================ -->
     <section id="produtos" class="section">
       <div class="section-container">
         <div class="section-header reveal">
           <div class="section-label">Destaques</div>
-          <h3 class="section-title">Mais Vendidos</h3>
-          <p class="section-subtitle">As peças favoritas das nossas clientes — qualidade e elegância em cada detalhe.</p>
+          <h3 class="section-title">Acabou de Chegar</h3>
+          <p class="section-subtitle">Os queridinhos das nossas clientes — peças que fazem a diferença no seu look.</p>
+        </div>
+
+        <!-- Category Carousel (round filter) -->
+        <div id="categorias" class="cat-carousel-section">
+          <div class="cat-carousel-wrapper">
+            <button class="cat-carousel-arrow cat-carousel-arrow--left" id="cat-arrow-left" aria-label="Anterior">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <div class="cat-carousel-track" id="cat-carousel-track">
+              <!-- Categories loaded dynamically -->
+            </div>
+            <button class="cat-carousel-arrow cat-carousel-arrow--right" id="cat-arrow-right" aria-label="Próximo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+          </div>
         </div>
         
-        <!-- Product Filters -->
-        <div class="product-filters reveal" id="product-filters">
-          <button class="filter-btn active" data-filter="all">Todos</button>
-          <button class="filter-btn" data-filter="prata-925">Prata 925</button>
-          <button class="filter-btn" data-filter="maquiagem">Maquiagem</button>
-          <button class="filter-btn" data-filter="cosmeticos">Cosméticos</button>
-          <div class="filter-price-wrap">
-            <label>Até R$</label>
-            <input type="range" id="price-filter" min="0" max="500" value="500" class="price-range">
-            <span id="price-filter-value">500</span>
+        <!-- Filters Bar -->
+        <div class="filters-bar reveal" id="product-filters">
+          <!-- Sort -->
+          <div class="filter-group filter-sort">
+            <button class="filter-sort-btn" id="sort-toggle" aria-label="Ordenar">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9M3 12h5m4 0l4 4m0 0l4-4m-4 4V4"/></svg>
+              <span id="sort-label">Relevância</span>
+              <svg class="filter-chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div class="filter-dropdown" id="sort-dropdown">
+              <button class="filter-dropdown-item active" data-sort="relevance">Relevância</button>
+              <button class="filter-dropdown-item" data-sort="price-asc">Menor preço</button>
+              <button class="filter-dropdown-item" data-sort="price-desc">Maior preço</button>
+              <button class="filter-dropdown-item" data-sort="name-asc">A → Z</button>
+              <button class="filter-dropdown-item" data-sort="newest">Mais recentes</button>
+            </div>
           </div>
+
+          <!-- Price Range -->
+          <div class="filter-group filter-price-group">
+            <button class="filter-price-toggle" id="price-toggle">
+              <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span id="price-label">Preço</span>
+              <svg class="filter-chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div class="filter-dropdown filter-price-dropdown" id="price-dropdown">
+              <div class="price-range-header">
+                <span class="price-range-val" id="price-min-display">R$ 0</span>
+                <span class="price-range-sep">—</span>
+                <span class="price-range-val" id="price-max-display">R$ 500</span>
+              </div>
+              <div class="price-range-track" id="price-range-track">
+                <div class="price-range-fill" id="price-range-fill"></div>
+                <input type="range" id="price-filter-min" min="0" max="500" value="0" step="5" class="price-slider price-slider--min">
+                <input type="range" id="price-filter-max" min="0" max="500" value="500" step="5" class="price-slider price-slider--max">
+              </div>
+              <div class="price-quick-btns">
+                <button class="price-quick" data-min="0" data-max="50">Até R$50</button>
+                <button class="price-quick" data-min="50" data-max="100">R$50–100</button>
+                <button class="price-quick" data-min="100" data-max="200">R$100–200</button>
+                <button class="price-quick" data-min="200" data-max="500">R$200+</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active filters count -->
+          <div class="filter-active-count" id="filter-active-count" style="display:none;">
+            <span id="filter-count-num">0</span> filtros
+            <button class="filter-clear-btn" id="filter-clear-all" aria-label="Limpar filtros">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+
+          <!-- Results count -->
+          <div class="filter-results-count" id="filter-results-count"></div>
         </div>
         
         <div class="products-grid stagger-children" id="products-grid">
@@ -457,8 +494,8 @@
       <div class="section-container">
         <div class="section-header reveal">
           <div class="section-label">Combos Especiais</div>
-          <h3 class="section-title">Nossos Kits</h3>
-          <p class="section-subtitle">Kits exclusivos montados com carinho para você. Muito mais por muito menos.</p>
+          <h3 class="section-title">Kits Exclusivos</h3>
+          <p class="section-subtitle">Monte seu ritual de beleza completo com os melhores combos.</p>
         </div>
         <div class="kits-carousel-wrapper">
           <button class="kits-carousel-nav kits-carousel-nav--prev" id="kits-carousel-prev" aria-label="Anterior">
@@ -474,20 +511,33 @@
 
     <!-- SPECIAL OFFERS CAROUSEL -->
     <section id="ofertas" class="offer-section" style="display:none;">
+      <!-- Animated background layers -->
+      <div class="offer-bg-shimmer"></div>
+      <div class="offer-bg-particles">
+        <span class="offer-particle offer-particle--1"></span>
+        <span class="offer-particle offer-particle--2"></span>
+        <span class="offer-particle offer-particle--3"></span>
+        <span class="offer-particle offer-particle--4"></span>
+        <span class="offer-particle offer-particle--5"></span>
+        <span class="offer-particle offer-particle--6"></span>
+        <span class="offer-particle offer-particle--7"></span>
+        <span class="offer-particle offer-particle--8"></span>
+        <span class="offer-particle offer-particle--9"></span>
+        <span class="offer-particle offer-particle--10"></span>
+        <span class="offer-particle offer-particle--11"></span>
+        <span class="offer-particle offer-particle--12"></span>
+      </div>
+      <div class="offer-bg-rose offer-bg-rose--1"></div>
+      <div class="offer-bg-rose offer-bg-rose--2"></div>
+      <div class="offer-bg-rose offer-bg-rose--3"></div>
       <div class="section-container">
         <div class="offer-section-header reveal">
-          <p class="offer-label">OFERTAS ESPECIAIS</p>
-          <h3 class="offer-section-title">Aproveite nossas ofertas</h3>
-          <p class="offer-section-subtitle">Promoções por tempo limitado. Não perca!</p>
+          <p class="offer-label">&#10022; TEMPO LIMITADO &#10022;</p>
+          <h3 class="offer-section-title">Ofertas Imperdíveis</h3>
+          <p class="offer-section-subtitle">Preços especiais por tempo limitado. Não deixe passar!</p>
         </div>
         <div class="offers-carousel-wrapper">
-          <button class="offers-carousel-nav offers-carousel-nav--prev" id="offers-carousel-prev" aria-label="Anterior">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-          </button>
           <div class="offers-carousel-track" id="offers-carousel-track"></div>
-          <button class="offers-carousel-nav offers-carousel-nav--next" id="offers-carousel-next" aria-label="Próximo">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-          </button>
         </div>
       </div>
     </section>
@@ -496,9 +546,9 @@
     <section id="depoimentos" class="section">
       <div class="section-container">
         <div class="section-header section-header--center reveal">
-          <div class="section-label">Depoimentos</div>
-          <h3 class="section-title">O que dizem sobre nós</h3>
-          <p class="section-subtitle">A opinião de quem já experimentou a magia Toque de Fada.</p>
+          <div class="section-label">Amamos você</div>
+          <h3 class="section-title">O Que Dizem Nossas Clientes</h3>
+          <p class="section-subtitle">Veja por que somos a escolha de milhares de mulheres.</p>
         </div>
         <div class="testimonials-grid stagger-children">
           <div class="testimonial-card reveal">
@@ -535,7 +585,7 @@
     <section id="faq" class="section section--alt">
       <div class="section-container">
         <div class="section-header section-header--center reveal">
-          <div class="section-label">Dúvidas</div>
+          <div class="section-label">Tire suas dúvidas</div>
           <h3 class="section-title">Perguntas Frequentes</h3>
           <p class="section-subtitle">Tire suas dúvidas sobre nossos produtos e serviços.</p>
         </div>
@@ -592,9 +642,9 @@
     <section id="contato" class="section">
       <div class="section-container">
         <div class="section-header section-header--center reveal">
-          <div class="section-label">Fale Conosco</div>
-          <h3 class="section-title">Entre em Contato</h3>
-          <p class="section-subtitle">Estamos aqui para ajudar! Envie sua mensagem ou fale conosco via WhatsApp.</p>
+          <div class="section-label">Fale com a gente</div>
+          <h3 class="section-title">Fale Conosco</h3>
+          <p class="section-subtitle">Estamos aqui para você! Mande sua mensagem ou fale pelo WhatsApp.</p>
         </div>
         <div class="contact-grid">
           <form class="contact-form reveal" id="contact-form">
@@ -676,8 +726,8 @@
           <div class="newsletter-icon">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
           </div>
-          <h3 class="newsletter-title">Receba ofertas exclusivas</h3>
-          <p class="newsletter-desc">Cadastre-se e ganhe <strong>10% OFF</strong> na primeira compra + acesso antecipado a lançamentos.</p>
+          <h3 class="newsletter-title">Receba Ofertas Exclusivas</h3>
+          <p class="newsletter-desc">Cadastre-se e ganhe <strong>10% OFF</strong> na primeira compra + novidades em primeira mão!</p>
           <form id="newsletter-form" class="newsletter-form">
             <label for="newsletter-email" class="sr-only">Seu e-mail</label>
             <input type="email" id="newsletter-email" class="newsletter-input" placeholder="Seu melhor e-mail" required>
@@ -701,10 +751,10 @@
     <div class="footer-main">
       <div class="footer-brand">
         <a href="#home" class="logo">
-          <svg class="logo-icon" viewBox="0 0 40 40" fill="currentColor"><path d="M20 5L23 15L33 15L25 22L28 33L20 26L12 33L15 22L7 15L17 15L20 5Z"/></svg>
-          <div class="logo-text"><h1>Toque de Fada</h1><p>JOIAS &amp; BELEZA</p></div>
+          <img class="logo-icon" src="logo.jpeg" alt="Toque de Fada">
+          <div class="logo-text"><h1>Toque de Fada</h1><p>BELEZA &amp; MAGIA</p></div>
         </a>
-        <p class="footer-desc">Joias e produtos de beleza que revelam a magia que existe em você. Cada peça é criada com amor e atenção aos detalhes.</p>
+        <p class="footer-desc">Produtos de beleza, joias e acessórios selecionados com curadoria. Qualidade e sofisticação para quem busca o melhor.</p>
         <div class="footer-socials">
           <a href="#" class="social-link" aria-label="Instagram"><svg fill="currentColor" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg></a>
           <a href="#" class="social-link" aria-label="Facebook"><svg fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg></a>
@@ -756,8 +806,6 @@
   <button id="back-to-top" class="back-to-top" aria-label="Voltar ao topo">
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
   </button>
-
-  <div id="toast-container" class="toast-container"></div>
 
   <!-- ============================================ -->
   <!-- AUTH MODAL                                   -->
@@ -874,6 +922,10 @@
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
       Painel Admin
     </button>
+    <button class="user-dropdown-item user-dropdown-item--edit" id="btn-edit-mode" style="display:none;">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+      Modo Edição
+    </button>
     <div class="user-dropdown-divider"></div>
     <button class="user-dropdown-item user-dropdown-item--danger" id="btn-logout">
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
@@ -915,10 +967,9 @@
       <div class="adm-sidebar-brand"><span><svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg></span><h2>Toque de Fada</h2></div>
       <nav class="adm-sidebar-nav">
         <button class="adm-nav active" data-adm-page="adm-dashboard"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg><span>Dashboard</span></button>
-        <button class="adm-nav" data-adm-page="adm-products"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg><span>Produtos</span></button>
-        <button class="adm-nav" data-adm-page="adm-categories"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg><span>Categorias</span></button>
+        <!-- Produtos e Categorias movidos para Modo Edição visual -->
         <button class="adm-nav" data-adm-page="adm-coupons"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg><span>Cupons</span></button>
-        <button class="adm-nav" data-adm-page="adm-offers"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg><span>Ofertas</span></button>
+        <!-- Ofertas, Hero, Depoimentos, FAQ movidos para Modo Edição visual -->
         <button class="adm-nav" data-adm-page="adm-orders"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg><span>Pedidos</span></button>
         <button class="adm-nav" data-adm-page="adm-reports"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg><span>Relatórios</span></button>
         <button class="adm-nav" data-adm-page="adm-settings"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg><span>Configurações</span></button>
@@ -944,7 +995,7 @@
             <div class="adm-stat adm-stat--revenue"><div class="adm-stat-icon" style="background:#fce7f3;color:#db2777;"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg></div><div><span class="adm-stat-val" id="adm-stat-total-orders">0</span><span class="adm-stat-lbl">Total de Pedidos</span></div></div>
             <div class="adm-stat adm-stat--revenue"><div class="adm-stat-icon" style="background:#fef3c7;color:#d97706;"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg></div><div><span class="adm-stat-val" id="adm-stat-avg-ticket">R$ 0</span><span class="adm-stat-lbl">Ticket Médio</span></div></div>
           </div>
-          <div class="adm-card"><h3>Ações Rápidas</h3><div class="adm-qa"><button class="adm-qa-btn" id="adm-qa-product">+ Novo Produto</button><button class="adm-qa-btn" id="adm-qa-coupon">+ Novo Cupom</button><button class="adm-qa-btn" id="adm-qa-offer">+ Nova Oferta</button><button class="adm-qa-btn" id="adm-qa-orders">Ver Pedidos</button><button class="adm-qa-btn" id="adm-qa-reports">Relatórios</button><button class="adm-qa-btn" id="adm-qa-settings">Configurações</button></div></div>
+          <div class="adm-card"><h3>Ações Rápidas</h3><div class="adm-qa"><button class="adm-qa-btn" id="adm-qa-coupon">+ Novo Cupom</button><button class="adm-qa-btn" id="adm-qa-orders">Ver Pedidos</button><button class="adm-qa-btn" id="adm-qa-reports">Relatórios</button><button class="adm-qa-btn" id="adm-qa-settings">Configurações</button></div><p style="color:#94a3b8;font-size:0.78rem;margin-top:8px;">💡 Produtos, Ofertas, Depoimentos e FAQ são gerenciados pelo <strong>Modo Edição</strong> visual.</p></div>
         </div>
 
         <!-- PRODUCTS -->
@@ -970,6 +1021,70 @@
         <div class="adm-page" id="adm-offers">
           <div class="adm-page-header"><h2>Ofertas Especiais</h2><button class="adm-btn-primary" id="adm-btn-add-offer">+ Nova Oferta</button></div>
           <div class="adm-table-wrap"><table class="adm-table"><thead><tr><th>Nome</th><th>Descricao</th><th>Preco</th><th>Antigo</th><th>Economia</th><th>Status</th><th style="width:140px">Acoes</th></tr></thead><tbody id="adm-offers-tbody"></tbody></table><p class="adm-empty" id="adm-offers-empty" style="display:none;">Nenhuma oferta cadastrada.</p></div>
+        </div>
+
+        <!-- HERO / PÁGINA INICIAL -->
+        <div class="adm-page" id="adm-hero">
+          <div class="adm-page-header"><h2>Página Inicial</h2></div>
+          <div class="adm-settings-grid">
+            <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg> Textos do Hero</h3>
+              <form id="adm-form-hero-texts">
+                <div class="adm-fg"><label>Badge (etiqueta)</label><input type="text" id="adm-hero-badge" placeholder="NOVA COLEÇÃO"></div>
+                <div class="adm-fg"><label>Título principal</label><input type="text" id="adm-hero-title" placeholder="Sua beleza, elevada."></div>
+                <div class="adm-fg"><label>Subtítulo</label><textarea id="adm-hero-subtitle" rows="3" placeholder="Produtos de beleza selecionados..."></textarea></div>
+                <div class="adm-fg"><label>Texto botão principal</label><input type="text" id="adm-hero-cta" placeholder="EXPLORAR COLEÇÃO"></div>
+                <div class="adm-fg"><label>Texto botão secundário</label><input type="text" id="adm-hero-cta2" placeholder="VER OFERTAS"></div>
+                <button type="submit" class="adm-btn-primary">Salvar Textos do Hero</button>
+              </form>
+            </div>
+            <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg> Estatísticas do Hero</h3>
+              <form id="adm-form-hero-stats">
+                <div class="adm-form-row"><div class="adm-fg"><label>Stat 1 - Valor</label><input type="text" id="adm-hero-stat1-val" placeholder="5k+"></div><div class="adm-fg"><label>Stat 1 - Texto</label><input type="text" id="adm-hero-stat1-label" placeholder="Clientes felizes"></div></div>
+                <div class="adm-form-row"><div class="adm-fg"><label>Stat 2 - Valor</label><input type="text" id="adm-hero-stat2-val" placeholder="300+"></div><div class="adm-fg"><label>Stat 2 - Texto</label><input type="text" id="adm-hero-stat2-label" placeholder="Produtos"></div></div>
+                <div class="adm-form-row"><div class="adm-fg"><label>Stat 3 - Valor</label><input type="text" id="adm-hero-stat3-val" placeholder="4.9"></div><div class="adm-fg"><label>Stat 3 - Texto</label><input type="text" id="adm-hero-stat3-label" placeholder="Avaliação"></div></div>
+                <button type="submit" class="adm-btn-primary">Salvar Estatísticas</button>
+              </form>
+            </div>
+            <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg> Títulos das Seções</h3>
+              <form id="adm-form-section-titles">
+                <p class="adm-form-subtitle">Seção Produtos</p>
+                <div class="adm-form-row"><div class="adm-fg"><label>Label</label><input type="text" id="adm-st-products-label" placeholder="Destaques"></div><div class="adm-fg"><label>Título</label><input type="text" id="adm-st-products-title" placeholder="Acabou de Chegar"></div></div>
+                <div class="adm-fg"><label>Subtítulo</label><input type="text" id="adm-st-products-subtitle" placeholder="Os queridinhos das nossas clientes..."></div>
+                <hr class="adm-separator">
+                <p class="adm-form-subtitle">Seção Depoimentos</p>
+                <div class="adm-form-row"><div class="adm-fg"><label>Label</label><input type="text" id="adm-st-testimonials-label" placeholder="O que dizem sobre nós"></div><div class="adm-fg"><label>Título</label><input type="text" id="adm-st-testimonials-title" placeholder="Avaliações Reais"></div></div>
+                <div class="adm-fg"><label>Subtítulo</label><input type="text" id="adm-st-testimonials-subtitle" placeholder="Veja por que somos a escolha..."></div>
+                <hr class="adm-separator">
+                <p class="adm-form-subtitle">Seção FAQ</p>
+                <div class="adm-form-row"><div class="adm-fg"><label>Label</label><input type="text" id="adm-st-faq-label" placeholder="Tire suas dúvidas"></div><div class="adm-fg"><label>Título</label><input type="text" id="adm-st-faq-title" placeholder="Perguntas Frequentes"></div></div>
+                <div class="adm-fg"><label>Subtítulo</label><input type="text" id="adm-st-faq-subtitle" placeholder="Tire suas dúvidas sobre nossos produtos..."></div>
+                <button type="submit" class="adm-btn-primary" style="margin-top:12px;">Salvar Títulos</button>
+              </form>
+            </div>
+            <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg> Barra de Confiança</h3>
+              <form id="adm-form-trust-bar">
+                <div class="adm-form-row"><div class="adm-fg"><label>Item 1 - Título</label><input type="text" id="adm-trust-1-title" placeholder="Frete Grátis"></div><div class="adm-fg"><label>Item 1 - Subtítulo</label><input type="text" id="adm-trust-1-sub" placeholder="Acima de R$199"></div></div>
+                <div class="adm-form-row"><div class="adm-fg"><label>Item 2 - Título</label><input type="text" id="adm-trust-2-title" placeholder="Compra Segura"></div><div class="adm-fg"><label>Item 2 - Subtítulo</label><input type="text" id="adm-trust-2-sub" placeholder="Criptografia SSL"></div></div>
+                <div class="adm-form-row"><div class="adm-fg"><label>Item 3 - Título</label><input type="text" id="adm-trust-3-title" placeholder="Trocas Fáceis"></div><div class="adm-fg"><label>Item 3 - Subtítulo</label><input type="text" id="adm-trust-3-sub" placeholder="30 dias para trocar"></div></div>
+                <div class="adm-form-row"><div class="adm-fg"><label>Item 4 - Título</label><input type="text" id="adm-trust-4-title" placeholder="6x Sem Juros"></div><div class="adm-fg"><label>Item 4 - Subtítulo</label><input type="text" id="adm-trust-4-sub" placeholder="No cartão de crédito"></div></div>
+                <button type="submit" class="adm-btn-primary">Salvar Barra de Confiança</button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- TESTIMONIALS -->
+        <div class="adm-page" id="adm-testimonials">
+          <div class="adm-page-header"><h2>Depoimentos</h2><button class="adm-btn-primary" id="adm-btn-add-testimonial">+ Novo Depoimento</button></div>
+          <div class="adm-content-cards" id="adm-testimonials-grid"></div>
+          <p class="adm-empty" id="adm-testimonials-empty" style="display:none;">Nenhum depoimento cadastrado.</p>
+        </div>
+
+        <!-- FAQ -->
+        <div class="adm-page" id="adm-faq">
+          <div class="adm-page-header"><h2>Perguntas Frequentes (FAQ)</h2><button class="adm-btn-primary" id="adm-btn-add-faq">+ Nova Pergunta</button></div>
+          <div class="adm-content-cards" id="adm-faq-grid"></div>
+          <p class="adm-empty" id="adm-faq-empty" style="display:none;">Nenhuma pergunta cadastrada.</p>
         </div>
 
         <!-- ORDERS -->
@@ -1009,49 +1124,152 @@
 
         <!-- REPORTS -->
         <div class="adm-page" id="adm-reports">
-          <div class="adm-page-header"><h2>Relatórios de Vendas</h2>
-            <div class="adm-report-period">
-              <select id="adm-report-period" class="adm-select-filter">
-                <option value="7">Últimos 7 dias</option>
-                <option value="30" selected>Últimos 30 dias</option>
-                <option value="90">Últimos 90 dias</option>
-                <option value="365">Último ano</option>
-                <option value="all">Todo o período</option>
+          <!-- Reports Header with Period + Export -->
+          <div class="rpt-header">
+            <div class="rpt-header__left">
+              <h2 class="rpt-title">Relatórios</h2>
+              <p class="rpt-subtitle">Visão completa do seu negócio</p>
+            </div>
+            <div class="rpt-header__right">
+              <select id="adm-report-period" class="rpt-period-select">
+                <option value="7">7 dias</option>
+                <option value="30" selected>30 dias</option>
+                <option value="90">90 dias</option>
+                <option value="365">1 ano</option>
+                <option value="all">Todo período</option>
               </select>
+              <div class="rpt-export-group">
+                <button class="rpt-export-btn" id="rpt-export-csv" title="Exportar CSV">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                  CSV
+                </button>
+                <button class="rpt-export-btn" id="rpt-export-pdf" title="Exportar PDF">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                  PDF
+                </button>
+              </div>
             </div>
           </div>
-          <!-- KPI Cards -->
-          <div class="adm-report-kpis" id="adm-report-kpis">
-            <div class="adm-kpi"><span class="adm-kpi-val" id="rpt-revenue">R$ 0</span><span class="adm-kpi-lbl">Receita no Período</span><span class="adm-kpi-trend" id="rpt-revenue-trend"></span></div>
-            <div class="adm-kpi"><span class="adm-kpi-val" id="rpt-orders">0</span><span class="adm-kpi-lbl">Pedidos</span></div>
-            <div class="adm-kpi"><span class="adm-kpi-val" id="rpt-avg">R$ 0</span><span class="adm-kpi-lbl">Ticket Médio</span></div>
-            <div class="adm-kpi"><span class="adm-kpi-val" id="rpt-delivered">0</span><span class="adm-kpi-lbl">Entregues</span></div>
-            <div class="adm-kpi"><span class="adm-kpi-val" id="rpt-canceled">0</span><span class="adm-kpi-lbl">Cancelados</span></div>
-            <div class="adm-kpi"><span class="adm-kpi-val" id="rpt-conversion">0%</span><span class="adm-kpi-lbl">Taxa de Conversão</span></div>
+
+          <!-- KPI Cards Row -->
+          <div class="rpt-kpis" id="adm-report-kpis">
+            <div class="rpt-kpi rpt-kpi--revenue">
+              <div class="rpt-kpi__icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+              <div class="rpt-kpi__data">
+                <span class="rpt-kpi__value" id="rpt-revenue">R$ 0</span>
+                <span class="rpt-kpi__label">Receita Total</span>
+                <span class="rpt-kpi__trend" id="rpt-revenue-trend"></span>
+              </div>
+            </div>
+            <div class="rpt-kpi rpt-kpi--orders">
+              <div class="rpt-kpi__icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg></div>
+              <div class="rpt-kpi__data">
+                <span class="rpt-kpi__value" id="rpt-orders">0</span>
+                <span class="rpt-kpi__label">Total de Pedidos</span>
+              </div>
+            </div>
+            <div class="rpt-kpi rpt-kpi--avg">
+              <div class="rpt-kpi__icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg></div>
+              <div class="rpt-kpi__data">
+                <span class="rpt-kpi__value" id="rpt-avg">R$ 0</span>
+                <span class="rpt-kpi__label">Ticket Médio</span>
+              </div>
+            </div>
+            <div class="rpt-kpi rpt-kpi--delivered">
+              <div class="rpt-kpi__icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>
+              <div class="rpt-kpi__data">
+                <span class="rpt-kpi__value" id="rpt-delivered">0</span>
+                <span class="rpt-kpi__label">Entregues</span>
+              </div>
+            </div>
+            <div class="rpt-kpi rpt-kpi--canceled">
+              <div class="rpt-kpi__icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></div>
+              <div class="rpt-kpi__data">
+                <span class="rpt-kpi__value" id="rpt-canceled">0</span>
+                <span class="rpt-kpi__label">Cancelados</span>
+              </div>
+            </div>
+            <div class="rpt-kpi rpt-kpi--conversion">
+              <div class="rpt-kpi__icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg></div>
+              <div class="rpt-kpi__data">
+                <span class="rpt-kpi__value" id="rpt-conversion">0%</span>
+                <span class="rpt-kpi__label">Taxa de Conversão</span>
+              </div>
+            </div>
           </div>
-          <!-- Charts -->
-          <div class="adm-report-charts">
-            <div class="adm-card adm-chart-card">
-              <h3>Receita por Dia</h3>
-              <div class="adm-chart-container" id="adm-chart-revenue"></div>
+
+          <!-- Charts Grid -->
+          <div class="rpt-charts-grid">
+            <!-- Line Chart: Revenue Over Time (full width) -->
+            <div class="rpt-chart-card rpt-chart-card--wide">
+              <div class="rpt-chart-head">
+                <div>
+                  <h3 class="rpt-chart-title">Receita ao Longo do Tempo</h3>
+                  <p class="rpt-chart-desc">Evolução diária da receita no período selecionado</p>
+                </div>
+              </div>
+              <div class="rpt-chart-body" id="adm-chart-revenue" style="height:280px;"></div>
             </div>
-            <div class="adm-card adm-chart-card">
-              <h3>Pedidos por Status</h3>
-              <div class="adm-chart-container adm-chart-donut-wrap" id="adm-chart-status"></div>
+
+            <!-- Pie Chart: Orders by Status -->
+            <div class="rpt-chart-card">
+              <div class="rpt-chart-head">
+                <div>
+                  <h3 class="rpt-chart-title">Pedidos por Status</h3>
+                  <p class="rpt-chart-desc">Distribuição atual dos pedidos</p>
+                </div>
+              </div>
+              <div class="rpt-chart-body rpt-chart-body--centered" id="adm-chart-status"></div>
             </div>
-            <div class="adm-card adm-chart-card">
-              <h3>Top Produtos Vendidos</h3>
-              <div class="adm-chart-container" id="adm-chart-top-products"></div>
+
+            <!-- Bar Chart: Top Products -->
+            <div class="rpt-chart-card">
+              <div class="rpt-chart-head">
+                <div>
+                  <h3 class="rpt-chart-title">Produtos Mais Vendidos</h3>
+                  <p class="rpt-chart-desc">Ranking dos 8 produtos mais populares</p>
+                </div>
+              </div>
+              <div class="rpt-chart-body" id="adm-chart-top-products"></div>
             </div>
-            <div class="adm-card adm-chart-card">
-              <h3>Vendas por Categoria</h3>
-              <div class="adm-chart-container adm-chart-donut-wrap" id="adm-chart-categories"></div>
+
+            <!-- Donut Chart: Revenue by Category -->
+            <div class="rpt-chart-card">
+              <div class="rpt-chart-head">
+                <div>
+                  <h3 class="rpt-chart-title">Receita por Categoria</h3>
+                  <p class="rpt-chart-desc">Participação de cada categoria na receita</p>
+                </div>
+              </div>
+              <div class="rpt-chart-body rpt-chart-body--centered" id="adm-chart-categories"></div>
+            </div>
+
+            <!-- Bar Chart: Orders per Day of Week -->
+            <div class="rpt-chart-card">
+              <div class="rpt-chart-head">
+                <div>
+                  <h3 class="rpt-chart-title">Pedidos por Dia da Semana</h3>
+                  <p class="rpt-chart-desc">Dias com maior volume de vendas</p>
+                </div>
+              </div>
+              <div class="rpt-chart-body" id="adm-chart-weekday"></div>
             </div>
           </div>
-          <!-- Recent orders table -->
-          <div class="adm-card" style="margin-top:24px;">
-            <h3>Últimos Pedidos</h3>
-            <div class="adm-table-wrap" style="box-shadow:none;"><table class="adm-table"><thead><tr><th>#</th><th>Data</th><th>Cliente</th><th>Total</th><th>Status</th></tr></thead><tbody id="adm-report-recent-tbody"></tbody></table></div>
+
+          <!-- Recent Orders Table -->
+          <div class="rpt-table-card">
+            <div class="rpt-chart-head">
+              <div>
+                <h3 class="rpt-chart-title">Últimos Pedidos</h3>
+                <p class="rpt-chart-desc">Os 15 pedidos mais recentes no período</p>
+              </div>
+            </div>
+            <div class="adm-table-wrap" style="box-shadow:none;">
+              <table class="adm-table rpt-table">
+                <thead><tr><th>#</th><th>Data</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Status</th></tr></thead>
+                <tbody id="adm-report-recent-tbody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -1060,8 +1278,7 @@
           <div class="adm-settings-grid">
             <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg> Contato</h3><form id="adm-form-contact"><div class="adm-fg"><label>Número WhatsApp (com DDI)</label><input type="text" id="adm-set-whatsapp" placeholder="5511999999999"></div><div class="adm-fg"><label>WhatsApp Display</label><input type="text" id="adm-set-whatsapp-display" placeholder="(11) 99999-9999"></div><div class="adm-fg"><label>E-mail</label><input type="email" id="adm-set-email" placeholder="contato@loja.com"></div><div class="adm-fg"><label>Horário de Atendimento</label><input type="text" id="adm-set-hours" placeholder="Seg-Sex 9h-18h"></div><button type="submit" class="adm-btn-primary">Salvar Contato</button></form></div>
             <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg> Redes Sociais</h3><form id="adm-form-social"><div class="adm-fg"><label>Instagram</label><input type="url" id="adm-set-instagram" placeholder="https://instagram.com/..."></div><div class="adm-fg"><label>Facebook</label><input type="url" id="adm-set-facebook" placeholder="https://facebook.com/..."></div><div class="adm-fg"><label>TikTok</label><input type="url" id="adm-set-tiktok" placeholder="https://tiktok.com/@..."></div><button type="submit" class="adm-btn-primary">Salvar Redes</button></form></div>
-            <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> Imagem Principal (Hero)</h3><form id="adm-form-hero-image"><div class="adm-fg"><label>Imagem de capa do site</label><div class="adm-dropzone" id="adm-hero-dropzone"><div class="adm-dropzone-empty" id="adm-hero-drop-empty"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="48" height="48"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg><p>Arraste uma imagem aqui ou <span class="adm-dropzone-link">clique para selecionar</span></p><small>PNG, JPG ou WebP — máx. 5MB — recomendado 800x1000px</small></div><div class="adm-dropzone-preview" id="adm-hero-drop-preview" style="display:none"><img id="adm-hero-drop-img" alt="Preview"><button type="button" class="adm-dropzone-remove" id="adm-hero-drop-remove" title="Remover imagem">✕</button></div><input type="file" id="adm-hero-image-upload" accept="image/*" style="display:none"><div class="adm-dropzone-loading" id="adm-hero-drop-loading" style="display:none"><div class="adm-spinner"></div><span>Enviando...</span></div></div></div><input type="hidden" id="adm-hero-image-url"><button type="submit" class="adm-btn-primary">Salvar Imagem Hero</button></form></div>
-            <div class="adm-card"><h3><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg> Banner Promocional</h3><form id="adm-form-promo"><div class="adm-fg"><label class="adm-toggle"><input type="checkbox" id="adm-set-promo-active"><span>Banner ativo</span></label></div><div class="adm-fg"><label>Texto do banner</label><input type="text" id="adm-set-promo-text" placeholder="FRETE GRÁTIS acima de R$199"></div><button type="submit" class="adm-btn-primary">Salvar Banner</button></form></div>
+            <!-- Hero Image and Promo Banner moved to Edit Mode visual controls -->
 
           </div>
         </div>
@@ -1219,6 +1436,100 @@
 
     <!-- NOTIFICATION -->
     <div id="adm-notification" class="adm-notification"></div>
+
+    <!-- TESTIMONIAL MODAL -->
+    <div class="adm-modal" id="adm-testimonial-modal">
+      <div class="adm-modal-bg" data-close-modal="adm-testimonial-modal"></div>
+      <div class="adm-modal-box" style="max-width:520px">
+        <div class="adm-modal-head"><h3 id="adm-testimonial-modal-title">Novo Depoimento</h3><button class="adm-modal-x" data-close-modal="adm-testimonial-modal">&#10005;</button></div>
+        <form id="adm-testimonial-form" class="adm-modal-body">
+          <input type="hidden" id="adm-tf-editing-idx" value="-1">
+          <div class="adm-fg"><label>Nome do cliente *</label><input type="text" id="adm-tf-name" required placeholder="Maria Silva"></div>
+          <div class="adm-fg"><label>Localização</label><input type="text" id="adm-tf-location" placeholder="São Paulo, SP"></div>
+          <div class="adm-fg"><label>Avaliação (estrelas)</label><select id="adm-tf-rating"><option value="5">★★★★★ (5)</option><option value="4">★★★★☆ (4)</option><option value="3">★★★☆☆ (3)</option></select></div>
+          <div class="adm-fg"><label>Depoimento *</label><textarea id="adm-tf-text" rows="4" required placeholder="O que o cliente disse..."></textarea></div>
+          <div class="adm-modal-foot"><button type="button" class="adm-btn-cancel" data-close-modal="adm-testimonial-modal">Cancelar</button><button type="submit" class="adm-btn-primary">Salvar Depoimento</button></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- FAQ MODAL -->
+    <div class="adm-modal" id="adm-faq-modal">
+      <div class="adm-modal-bg" data-close-modal="adm-faq-modal"></div>
+      <div class="adm-modal-box" style="max-width:520px">
+        <div class="adm-modal-head"><h3 id="adm-faq-modal-title">Nova Pergunta</h3><button class="adm-modal-x" data-close-modal="adm-faq-modal">&#10005;</button></div>
+        <form id="adm-faq-form" class="adm-modal-body">
+          <input type="hidden" id="adm-faqf-editing-idx" value="-1">
+          <div class="adm-fg"><label>Pergunta *</label><input type="text" id="adm-faqf-question" required placeholder="Qual o prazo de entrega?"></div>
+          <div class="adm-fg"><label>Resposta *</label><textarea id="adm-faqf-answer" rows="5" required placeholder="Escreva a resposta completa..."></textarea></div>
+          <div class="adm-modal-foot"><button type="button" class="adm-btn-cancel" data-close-modal="adm-faq-modal">Cancelar</button><button type="submit" class="adm-btn-primary">Salvar Pergunta</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT MODE: SLIM TOP BAR -->
+  <div id="edit-mode-bar" class="em-bar" style="display:none;">
+    <div class="em-bar-inner">
+      <div class="em-bar__left">
+        <span class="em-badge">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+          MODO EDIÇÃO
+        </span>
+        <span class="em-hint">Clique em "Editar" nas seções</span>
+      </div>
+      <div class="em-bar__right">
+        <button class="em-btn em-btn--global" id="em-global-btn">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+          Config. Global
+        </button>
+        <button class="em-btn em-btn--reset" id="em-reset" title="Resetar todas as edições ao padrão">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg>
+          Resetar
+        </button>
+        <button class="em-btn em-btn--cancel" id="em-cancel">Cancelar</button>
+        <button class="em-btn em-btn--save" id="em-save">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          Salvar Tudo
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT MODE: SECTION EDIT PANEL (slides from right) -->
+  <div id="em-panel-backdrop" class="em-panel-backdrop" style="display:none;"></div>
+  <div id="em-section-panel" class="em-section-panel" style="display:none;">
+    <div class="em-panel-header">
+      <h3 id="em-panel-title">Editar Seção</h3>
+      <button class="em-panel-close" id="em-panel-close">&times;</button>
+    </div>
+    <div class="em-panel-body" id="em-panel-body"></div>
+    <div class="em-panel-footer">
+      <button class="em-panel-save" id="em-panel-save">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        Salvar Seção
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- EDIT MODE CRUD MODAL (reusable)              -->
+  <!-- ============================================ -->
+  <div id="em-crud-overlay" class="em-crud-overlay" style="display:none;">
+    <div class="em-crud-modal">
+      <div class="em-crud-header">
+        <h3 id="em-crud-title">Novo Item</h3>
+        <button class="em-crud-close" id="em-crud-close" aria-label="Fechar">&times;</button>
+      </div>
+      <form id="em-crud-form" class="em-crud-body">
+        <!-- Dynamic fields injected by JS -->
+        <div id="em-crud-fields"></div>
+        <div class="em-crud-footer">
+          <button type="button" class="em-crud-btn em-crud-btn--cancel" id="em-crud-cancel-btn">Cancelar</button>
+          <button type="submit" class="em-crud-btn em-crud-btn--save" id="em-crud-save-btn">Salvar</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <script src="supabase-client.js"></script>
