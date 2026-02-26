@@ -210,8 +210,8 @@ document.addEventListener('DOMContentLoaded', () => {
       price: parseFloat(p.price),
       oldPrice: p.old_price ? parseFloat(p.old_price) : null,
       description: p.description || '',
-      rating: parseFloat(p.rating) || 5.0,
-      reviews: p.reviews_count || 0,
+      rating: p._avgRating != null ? p._avgRating : (parseFloat(p.rating) || 0),
+      reviews: p._reviewCount != null ? p._reviewCount : (p.reviews_count || 0),
       badge: p.badge || null,
       images: p.images || [],
       imageUrl: p.image_url || null,
@@ -235,7 +235,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const badgeHtml = p.badge ? `<span class="product-badge ${badgeClass}">${p.badge}</span>` : '';
     const oldPriceHtml = p.oldPrice ? `<span class="product-price-old">R$ ${p.oldPrice.toFixed(2).replace('.', ',')}</span>` : '';
     const priceHtml = `<span class="product-price">R$ ${p.price.toFixed(2).replace('.', ',')}</span>`;
-    const starsHtml = generateStars(p.rating);
+    const starsHtml = p.reviews > 0 ? generateStars(p.rating) : '☆☆☆☆☆';
+    const reviewsLabel = p.reviews > 0 ? `(${p.reviews})` : '(0)';
 
     return `<div class="product-card reveal" data-category="${p.categorySlug}" data-price="${p.price}" data-name="${p.name}" data-id="${p.id}">
       <div class="product-image" style="background: ${bg};">
@@ -252,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <h4 class="product-name">${p.name}</h4>
         <div class="product-rating">
           <div class="mini-stars">${starsHtml}</div>
-          <span>(${p.reviews})</span>
+          <span>${reviewsLabel}</span>
         </div>
         <div class="product-footer">
           <div>${oldPriceHtml}${priceHtml}</div>
@@ -380,6 +381,24 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ---- OFFERS CAROUSEL ----
+  async function loadOffersCarousel() {
+    const offerSection = document.getElementById('ofertas');
+    try {
+      if (typeof supabase !== 'undefined') {
+        const activeOffers = await supabase.getActiveOffers();
+        if (activeOffers && activeOffers.length > 0) {
+          if (offerSection) offerSection.style.display = '';
+          renderOffersCarousel(activeOffers);
+        } else {
+          if (offerSection) offerSection.style.display = 'none';
+        }
+      }
+    } catch (e) {
+      console.log('Offers load error:', e.message);
+      if (offerSection) offerSection.style.display = 'none';
+    }
+  }
+
   function renderOffersCarousel(offers) {
     const track = document.getElementById('offers-carousel-track');
     if (!track || !offers.length) return;
@@ -726,11 +745,36 @@ document.addEventListener('DOMContentLoaded', () => {
     const hadCache = loadCachedProducts();
     try {
       if (typeof supabase !== 'undefined') {
-        const dbProducts = await supabase.getProducts();
+        // Fetch products and all reviews in parallel
+        const [dbProducts, allReviews] = await Promise.all([
+          supabase.getProducts(),
+          supabase.getAllReviews().catch(() => [])
+        ]);
+
+        // Build review stats per product
+        const reviewStats = {};
+        if (Array.isArray(allReviews)) {
+          allReviews.forEach(r => {
+            const pid = r.product_id;
+            if (!reviewStats[pid]) reviewStats[pid] = { sum: 0, count: 0 };
+            reviewStats[pid].sum += (r.rating || 5);
+            reviewStats[pid].count++;
+          });
+        }
+
         if (dbProducts && Array.isArray(dbProducts) && dbProducts.length > 0) {
           PRODUCTS = {};
           const converted = [];
           dbProducts.filter(p => p.active !== false).forEach(p => {
+            // Enrich with real review stats
+            const stats = reviewStats[p.id];
+            if (stats && stats.count > 0) {
+              p._avgRating = Math.round((stats.sum / stats.count) * 10) / 10;
+              p._reviewCount = stats.count;
+            } else {
+              p._avgRating = 0;
+              p._reviewCount = 0;
+            }
             const cp = convertDbProduct(p);
             PRODUCTS[p.id] = cp;
             converted.push(cp);
@@ -768,6 +812,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const floatBtn = document.getElementById('whatsapp-float-btn');
       if (floatBtn && contact.whatsapp) {
         floatBtn.href = `https://wa.me/${contact.whatsapp}?text=${encodeURIComponent('Ola! Vim pelo site Toque de Fada e gostaria de mais informacoes.')}`;
+      }
+    }
+
+    // Apply promo banner
+    const promoBanner = settings.promo_banner;
+    if (promoBanner) {
+      const banner = document.querySelector('.promo-banner');
+      const promoTextEl = document.getElementById('promo-text');
+      if (banner) {
+        banner.style.display = promoBanner.active ? '' : 'none';
+      }
+      if (promoTextEl && promoBanner.text) {
+        promoTextEl.textContent = promoBanner.text;
       }
     }
 
@@ -944,23 +1001,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Apply special offers carousel
-    const allOffers = settings.offers;
-    let activeOffers = [];
-    if (Array.isArray(allOffers)) {
-      activeOffers = allOffers.filter(o => o.active !== false);
-    } else {
-      // Fallback to old single special_offer format
-      const offer = settings.special_offer;
-      if (offer && offer.active) activeOffers = [offer];
-    }
-    const offerSection = document.getElementById('ofertas');
-    if (activeOffers.length > 0) {
-      if (offerSection) offerSection.style.display = '';
-      renderOffersCarousel(activeOffers);
-    } else {
-      if (offerSection) offerSection.style.display = 'none';
-    }
+    // Apply special offers carousel — loaded separately from offers table
+    loadOffersCarousel();
 
     // Apply inline edit mode changes (saved via WYSIWYG editor)
     if (typeof window._applyEditModeFromSettings === 'function') {
@@ -1536,12 +1578,17 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('modal-title').textContent = product.name;
     document.getElementById('qty-value').textContent = '1';
 
-    // Stars
+    // Stars — show current cached data, loadProductReviews will update with live data
     const starsContainer = document.getElementById('modal-stars');
-    const fullStars = Math.floor(product.rating);
-    const halfStar = product.rating % 1 >= 0.5;
-    starsContainer.innerHTML = '★'.repeat(fullStars) + (halfStar ? '<span class="star-half">★</span>' : '') + '☆'.repeat(5 - fullStars - (halfStar ? 1 : 0));
-    document.getElementById('modal-rating-text').textContent = `${product.rating} (${product.reviews} avaliações)`;
+    if (product.reviews > 0) {
+      const fullStars = Math.floor(product.rating);
+      const halfStar = product.rating % 1 >= 0.5;
+      starsContainer.innerHTML = '★'.repeat(fullStars) + (halfStar ? '<span class="star-half">★</span>' : '') + '☆'.repeat(5 - fullStars - (halfStar ? 1 : 0));
+      document.getElementById('modal-rating-text').textContent = `${product.rating} (${product.reviews} avaliação${product.reviews > 1 ? 'ões' : ''})`;
+    } else {
+      starsContainer.innerHTML = '☆☆☆☆☆';
+      document.getElementById('modal-rating-text').textContent = 'Sem avaliações';
+    }
 
     // Prices
     const pricesEl = document.getElementById('modal-prices');
@@ -1591,24 +1638,25 @@ document.addEventListener('DOMContentLoaded', () => {
     buildGalleryThumbs();
     setGallerySlide(0);
 
-    // Reviews
+    // Reviews - load from Supabase
     const reviewsEl = document.getElementById('modal-reviews');
-    if (product.reviewsList && product.reviewsList.length > 0) {
-      reviewsEl.innerHTML = product.reviewsList.map(r => `
-        <div class="review-item">
-          <div class="review-header">
-            <div class="review-avatar">${r.author.charAt(0)}</div>
-            <div>
-              <p class="review-author">${r.author}</p>
-              <div class="review-stars">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>
-            </div>
-            <span class="review-date">${r.date}</span>
-          </div>
-          <p class="review-text">${r.text}</p>
-        </div>
-      `).join('');
-    } else {
-      reviewsEl.innerHTML = '<p class="no-reviews">Nenhuma avaliação ainda.</p>';
+    reviewsEl.innerHTML = '<p class="no-reviews">Carregando avaliações...</p>';
+    loadProductReviews(product.id || productId);
+
+    // Review form - show/hide based on login
+    const reviewFormWrap = document.getElementById('review-form-wrap');
+    const reviewForm = document.getElementById('review-form');
+    const reviewLoginMsg = document.getElementById('review-login-msg');
+    if (reviewFormWrap) {
+      reviewFormWrap.dataset.productId = product.id || productId;
+      if (currentUser) {
+        reviewForm.style.display = '';
+        reviewLoginMsg.style.display = 'none';
+        resetReviewForm();
+      } else {
+        reviewForm.style.display = 'none';
+        reviewLoginMsg.style.display = '';
+      }
     }
 
     // WhatsApp link
@@ -1633,6 +1681,153 @@ document.addEventListener('DOMContentLoaded', () => {
   if (productModalClose) productModalClose.addEventListener('click', closeProductModal);
   if (productModalOverlay) productModalOverlay.addEventListener('click', closeProductModal);
 
+  // ============================================
+  // PRODUCT REVIEWS SYSTEM
+  // ============================================
+  let reviewFormRating = 5;
+
+  function renderReviewsHTML(reviews) {
+    if (!reviews || !reviews.length) {
+      return '<p class="no-reviews">Nenhuma avaliação ainda. Seja o primeiro!</p>';
+    }
+    return reviews.map(r => {
+      const name = r.author_name || r.author || 'Anônimo';
+      const rating = r.rating || 5;
+      const text = r.review_text || r.text || '';
+      const date = r.created_at ? new Date(r.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }) : (r.date || '');
+      return `
+      <div class="review-item">
+        <div class="review-header">
+          <div class="review-avatar">${name.charAt(0).toUpperCase()}</div>
+          <div>
+            <p class="review-author">${name}</p>
+            <div class="review-stars">${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}</div>
+          </div>
+          <span class="review-date">${date}</span>
+        </div>
+        <p class="review-text">${text}</p>
+      </div>`;
+    }).join('');
+  }
+
+  async function loadProductReviews(productId) {
+    const reviewsEl = document.getElementById('modal-reviews');
+    try {
+      const reviews = await supabase.getProductReviews(productId);
+      reviewsEl.innerHTML = renderReviewsHTML(reviews);
+
+      // Update rating display
+      if (reviews.length) {
+        const avg = reviews.reduce((sum, r) => sum + (r.rating || 5), 0) / reviews.length;
+        const starsContainer = document.getElementById('modal-stars');
+        const fullStars = Math.floor(avg);
+        const halfStar = avg % 1 >= 0.5;
+        if (starsContainer) {
+          starsContainer.innerHTML = '★'.repeat(fullStars) + (halfStar ? '<span class="star-half">★</span>' : '') + '☆'.repeat(5 - fullStars - (halfStar ? 1 : 0));
+        }
+        const ratingText = document.getElementById('modal-rating-text');
+        if (ratingText) ratingText.textContent = `${avg.toFixed(1)} (${reviews.length} avaliação${reviews.length > 1 ? 'ões' : ''})`;
+      }
+    } catch (err) {
+      console.error('Erro ao carregar avaliações:', err);
+      reviewsEl.innerHTML = '<p class="no-reviews">Nenhuma avaliação ainda. Seja o primeiro!</p>';
+    }
+  }
+
+  function resetReviewForm() {
+    reviewFormRating = 5;
+    const textarea = document.getElementById('review-form-text');
+    if (textarea) textarea.value = '';
+    const msg = document.getElementById('review-form-msg');
+    if (msg) { msg.textContent = ''; msg.className = 'review-form-msg'; }
+    updateReviewStars();
+  }
+
+  function updateReviewStars() {
+    document.querySelectorAll('#review-form-stars .review-star').forEach(star => {
+      const val = parseInt(star.dataset.star);
+      star.classList.toggle('active', val <= reviewFormRating);
+    });
+  }
+
+  // Star click handler
+  document.getElementById('review-form-stars')?.addEventListener('click', (e) => {
+    const star = e.target.closest('.review-star');
+    if (star) {
+      reviewFormRating = parseInt(star.dataset.star);
+      updateReviewStars();
+    }
+  });
+
+  // Star hover effects
+  document.getElementById('review-form-stars')?.addEventListener('mouseover', (e) => {
+    const star = e.target.closest('.review-star');
+    if (star) {
+      const hoverVal = parseInt(star.dataset.star);
+      document.querySelectorAll('#review-form-stars .review-star').forEach(s => {
+        s.classList.toggle('active', parseInt(s.dataset.star) <= hoverVal);
+      });
+    }
+  });
+  document.getElementById('review-form-stars')?.addEventListener('mouseleave', () => {
+    updateReviewStars();
+  });
+
+  // Submit review
+  document.getElementById('review-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const wrap = document.getElementById('review-form-wrap');
+    const productId = wrap?.dataset.productId;
+    if (!productId || !currentUser) return;
+
+    const text = document.getElementById('review-form-text')?.value?.trim();
+    if (!text) return;
+
+    const submitBtn = document.getElementById('review-form-submit');
+    const msg = document.getElementById('review-form-msg');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Enviando...';
+
+    try {
+      const userEmail = currentUser.email;
+
+      // Check if user already reviewed this product
+      let existingReviews = [];
+      try { existingReviews = await supabase.getProductReviews(productId); } catch(_) {}
+      const alreadyReviewed = existingReviews.find(r => r.user_email === userEmail);
+      if (alreadyReviewed) {
+        msg.textContent = 'Você já avaliou este produto.';
+        msg.className = 'review-form-msg error';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Enviar Avaliação';
+        return;
+      }
+
+      await supabase.createReview({
+        product_id: productId,
+        user_email: userEmail,
+        author_name: currentUser.user_metadata?.full_name || currentUser.email?.split('@')[0] || 'Cliente',
+        rating: reviewFormRating,
+        review_text: text,
+      });
+
+      msg.textContent = 'Avaliação enviada com sucesso!';
+      msg.className = 'review-form-msg success';
+
+      // Reload reviews
+      loadProductReviews(productId);
+      document.getElementById('review-form-text').value = '';
+      reviewFormRating = 5;
+      updateReviewStars();
+
+    } catch (err) {
+      msg.textContent = 'Erro ao enviar. Tente novamente.';
+      msg.className = 'review-form-msg error';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Enviar Avaliação';
+    }
+  });
   // Qty controls
   document.getElementById('qty-minus')?.addEventListener('click', () => {
     if (modalQty > 1) {
@@ -3861,19 +4056,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- OFFERS ----
     async function admLoadOffers() {
       try {
-        const rows = await supabase.getSiteSettings();
-        const offersRow = rows.find(r => r.key === 'offers');
-        if (offersRow) {
-          admOffers = typeof offersRow.value === 'string' ? JSON.parse(offersRow.value) : offersRow.value;
-          if (!Array.isArray(admOffers)) admOffers = [];
-        } else {
-          // Migrate from old single special_offer format
-          const oldOffer = rows.find(r => r.key === 'special_offer');
-          if (oldOffer) {
-            const val = typeof oldOffer.value === 'string' ? JSON.parse(oldOffer.value) : oldOffer.value;
-            if (val && val.name) { admOffers = [val]; } else { admOffers = []; }
-          } else { admOffers = []; }
-        }
+        admOffers = await supabase.getOffers();
+        if (!Array.isArray(admOffers)) admOffers = [];
       } catch(e) { admOffers = []; }
       admRenderOffers();
     }
@@ -3905,14 +4089,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }).join('');
     }
 
-    async function admSaveOffers() {
+    async function admSaveOffer(offerData, existingId) {
       try {
-        await supabase.upsertSiteSetting('offers', admOffers);
-        // Also update old special_offer for backwards compatibility (first active offer)
-        const firstActive = admOffers.find(o => o.active !== false);
-        await supabase.upsertSiteSetting('special_offer', firstActive || { active: false });
+        if (existingId) {
+          await supabase.updateOffer(existingId, offerData);
+        } else {
+          await supabase.createOffer(offerData);
+        }
+        await admLoadOffers();
         admRefreshSettings();
-      } catch(err) { admNotify('Erro ao salvar ofertas', 'error'); }
+      } catch(err) { admNotify('Erro ao salvar oferta', 'error'); }
     }
 
     function admOpenOfferModal(offer = null, index = -1) {
@@ -3957,18 +4143,13 @@ document.addEventListener('DOMContentLoaded', () => {
         description: document.getElementById('adm-of-desc').value.trim(),
         price: parseFloat(document.getElementById('adm-of-price').value) || 0,
         old_price: parseFloat(document.getElementById('adm-of-old-price').value) || 0,
-        product_id: document.getElementById('adm-of-product-id').value.trim(),
+        product_id: document.getElementById('adm-of-product-id').value.trim() || null,
         image_url: (document.getElementById('adm-of-image')?.value || '').trim()
       };
-      if (idx !== '') {
-        admOffers[parseInt(idx)] = offerData;
-      } else {
-        admOffers.push(offerData);
-      }
-      await admSaveOffers();
-      admRenderOffers();
+      const existingId = idx !== '' && admOffers[parseInt(idx)] ? admOffers[parseInt(idx)].id : null;
+      await admSaveOffer(offerData, existingId);
       document.getElementById('adm-offer-modal').classList.remove('open');
-      admNotify(idx !== '' ? 'Oferta atualizada!' : 'Oferta criada!');
+      admNotify(existingId ? 'Oferta atualizada!' : 'Oferta criada!');
     });
 
     document.getElementById('adm-offers-tbody')?.addEventListener('click', async (e) => {
@@ -3982,20 +4163,22 @@ document.addEventListener('DOMContentLoaded', () => {
       if (toggleBtn) {
         const i = parseInt(toggleBtn.dataset.admToggleOffer);
         if (admOffers[i]) {
-          admOffers[i].active = admOffers[i].active === false ? true : false;
-          await admSaveOffers();
-          admRenderOffers();
-          admNotify(admOffers[i].active ? 'Oferta ativada!' : 'Oferta desativada!');
+          const newActive = admOffers[i].active === false;
+          await supabase.updateOffer(admOffers[i].id, { active: newActive });
+          await admLoadOffers();
+          admNotify(newActive ? 'Oferta ativada!' : 'Oferta desativada!');
         }
         return;
       }
       const deleteBtn = e.target.closest('[data-adm-delete-offer]');
       if (deleteBtn) {
         if (!confirm('Excluir esta oferta?')) return;
-        admOffers.splice(parseInt(deleteBtn.dataset.admDeleteOffer), 1);
-        await admSaveOffers();
-        admRenderOffers();
-        admNotify('Oferta excluida!');
+        const i = parseInt(deleteBtn.dataset.admDeleteOffer);
+        if (admOffers[i]) {
+          await supabase.deleteOffer(admOffers[i].id);
+          await admLoadOffers();
+          admNotify('Oferta excluída!');
+        }
       }
     });
 
@@ -5229,8 +5412,9 @@ document.addEventListener('DOMContentLoaded', () => {
       { sel: '#contato .section-label', key: 'contact_label', label: 'Label Contato' },
       { sel: '#contato .section-title', key: 'contact_title', label: 'Título Contato' },
       { sel: '#contato .section-subtitle', key: 'contact_sub', label: 'Subtítulo Contato' },
-      { sel: '.newsletter-section .section-title', key: 'news_title', label: 'Título Newsletter' },
-      { sel: '.newsletter-section .section-subtitle', key: 'news_sub', label: 'Subtítulo Newsletter' },
+      { sel: '.newsletter-section .newsletter-title', key: 'news_title', label: 'Título Newsletter' },
+      { sel: '.newsletter-section .newsletter-desc', key: 'news_sub', label: 'Subtítulo Newsletter' },
+      { sel: '.newsletter-section .newsletter-note', key: 'news_note', label: 'Nota Newsletter' },
       { sel: '.footer-brand .footer-desc', key: 'footer_about', label: 'Sobre (Footer)' },
       { sel: '.footer-main > div:nth-child(2) .footer-heading', key: 'footer_h_links', label: 'Título Links' },
       { sel: '.footer-main > div:nth-child(3) .footer-heading', key: 'footer_h_cat', label: 'Título Categorias' },
@@ -5268,17 +5452,39 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     // --- Section config (maps sections to their editable elements) ---
+    // SVG icon helper (14x14 stroke icons)
+    const _i = (d) => `<svg class="em-ico" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${d}"/></svg>`;
+    const EM_ICONS = {
+      megaphone: _i('M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z'),
+      home: _i('M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z'),
+      star: _i('M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z'),
+      bag: _i('M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z'),
+      tag: _i('M7 7h.01M7 3h5a2 2 0 011.414.586l7 7a2 2 0 010 2.828l-5 5a2 2 0 01-2.828 0l-7-7A2 2 0 015 10V5a2 2 0 012-2z'),
+      chat: _i('M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'),
+      help: _i('M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'),
+      mail: _i('M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'),
+      newspaper: _i('M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z'),
+      footer: _i('M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm0 8a1 1 0 011-1h14a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z'),
+      palette: _i('M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01'),
+      type: _i('M4 6h16M4 12h8m-8 6h16'),
+      shapes: _i('M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'),
+      compass: _i('M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7'),
+      sparkle: _i('M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3'),
+      ruler: _i('M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10'),
+      settings: _i('M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z'),
+    };
+
     const SECTION_CONFIG = [
-      { id: 'promo', sel: '.promo-banner', label: 'Banner Promocional', icon: '📢', keys: [], special: 'promo' },
-      { id: 'hero', sel: '#home', label: 'Hero', icon: '🏠', keys: ['hero_badge','hero_title','hero_subtitle','hero_cta','hero_cta2','stat1_val','stat1_lbl','stat2_val','stat2_lbl','stat3_val','stat3_lbl','float_top','float_bottom'], special: 'hero', fixed: true },
-      { id: 'trust', sel: '.trust-bar', label: 'Confiança', icon: '⭐', keys: ['trust1','trust2','trust3','trust4'] },
-      { id: 'produtos', sel: '#produtos', label: 'Produtos', icon: '🛍️', keys: ['prod_label','prod_title','prod_sub'] },
-      { id: 'ofertas', sel: '#ofertas', label: 'Ofertas', icon: '🏷️', keys: ['offer_label','offer_title','offer_sub'] },
-      { id: 'depoimentos', sel: '#depoimentos', label: 'Depoimentos', icon: '💬', keys: ['test_label','test_title','test_sub'], multi: 'testimonials' },
-      { id: 'faq', sel: '#faq', label: 'FAQ', icon: '❓', keys: ['faq_label','faq_title','faq_sub'], multi: 'faq' },
-      { id: 'contato', sel: '#contato', label: 'Contato', icon: '📧', keys: ['contact_label','contact_title','contact_sub'] },
-      { id: 'newsletter', sel: '.newsletter-section', label: 'Newsletter', icon: '📰', keys: ['news_title','news_sub'] },
-      { id: 'footer', sel: '.site-footer', label: 'Footer', icon: '🦶', keys: ['footer_about','footer_h_links','footer_h_cat','footer_h_contact'], special: 'footer' },
+      { id: 'promo', sel: '.promo-banner', label: 'Banner Promocional', icon: EM_ICONS.megaphone, keys: [], special: 'promo' },
+      { id: 'hero', sel: '#home', label: 'Hero', icon: EM_ICONS.home, keys: ['hero_badge','hero_title','hero_subtitle','hero_cta','hero_cta2','stat1_val','stat1_lbl','stat2_val','stat2_lbl','stat3_val','stat3_lbl','float_top','float_bottom'], special: 'hero', fixed: true },
+      { id: 'trust', sel: '.trust-bar', label: 'Confiança', icon: EM_ICONS.star, keys: ['trust1','trust2','trust3','trust4'] },
+      { id: 'produtos', sel: '#produtos', label: 'Produtos', icon: EM_ICONS.bag, keys: ['prod_label','prod_title','prod_sub'] },
+      { id: 'ofertas', sel: '#ofertas', label: 'Ofertas', icon: EM_ICONS.tag, keys: ['offer_label','offer_title','offer_sub'] },
+      { id: 'depoimentos', sel: '#depoimentos', label: 'Depoimentos', icon: EM_ICONS.chat, keys: ['test_label','test_title','test_sub'], multi: 'testimonials' },
+      { id: 'faq', sel: '#faq', label: 'FAQ', icon: EM_ICONS.help, keys: ['faq_label','faq_title','faq_sub'], multi: 'faq' },
+      { id: 'contato', sel: '#contato', label: 'Contato', icon: EM_ICONS.mail, keys: ['contact_label','contact_title','contact_sub'] },
+      { id: 'newsletter', sel: '.newsletter-section', label: 'Newsletter', icon: EM_ICONS.newspaper, keys: ['news_title','news_sub','news_note'] },
+      { id: 'footer', sel: '.site-footer', label: 'Footer', icon: EM_ICONS.footer, keys: ['footer_about','footer_h_links','footer_h_cat','footer_h_contact'], special: 'footer' },
     ];
 
     // Font options reusable HTML
@@ -5350,15 +5556,39 @@ document.addEventListener('DOMContentLoaded', () => {
       bar.style.display = '';
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
+      // Always show promo banner in edit mode (with inactive indicator if hidden)
+      const promoBanner = document.querySelector('.promo-banner');
+      if (promoBanner) {
+        promoBanner._wasHidden = promoBanner.style.display === 'none';
+        if (promoBanner._wasHidden) {
+          promoBanner.style.display = '';
+          promoBanner.classList.add('em-promo-inactive');
+        }
+      }
+
       // Save original state
       originalHTML = {};
+      const rootCs = getComputedStyle(document.documentElement);
       originalStyles = {
         bodyBg: document.body.style.background || '',
+        bodyColor: document.body.style.color || '',
+        bodyFontSize: document.body.style.fontSize || '',
         footerBg: '',
         footerColor: '',
-        globalFont: '',
-        primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim(),
-        accentColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+        globalFont: document.body.style.fontFamily || '',
+        primaryColor: rootCs.getPropertyValue('--primary').trim(),
+        accentColor: rootCs.getPropertyValue('--accent').trim(),
+        bgColor: rootCs.getPropertyValue('--bg').trim(),
+        bgAltColor: rootCs.getPropertyValue('--bg-alt').trim(),
+        surfaceColor: rootCs.getPropertyValue('--surface').trim(),
+        textDarkColor: rootCs.getPropertyValue('--text-dark').trim(),
+        textColor: rootCs.getPropertyValue('--text').trim(),
+        textMutedColor: rootCs.getPropertyValue('--text-muted').trim(),
+        borderColor: rootCs.getPropertyValue('--border').trim(),
+        radiusSm: rootCs.getPropertyValue('--radius-sm').trim(),
+        radiusMd: rootCs.getPropertyValue('--radius-md').trim(),
+        radiusLg: rootCs.getPropertyValue('--radius-lg').trim(),
+        radiusXl: rootCs.getPropertyValue('--radius-xl').trim(),
       };
       const footer = document.querySelector('.site-footer');
       if (footer) {
@@ -5401,6 +5631,22 @@ document.addEventListener('DOMContentLoaded', () => {
       selectedEl = null;
       currentPanelSection = null;
 
+      // Restore promo banner hidden state if it was inactive
+      const promoBanner = document.querySelector('.promo-banner');
+      if (promoBanner) {
+        promoBanner.classList.remove('em-promo-inactive');
+        if (promoBanner._wasHidden && !revert) {
+          // Check actual saved state
+          const checkbox = document.getElementById('em-p-promo-active');
+          if (!checkbox || !checkbox.checked) {
+            promoBanner.style.display = 'none';
+          }
+        } else if (promoBanner._wasHidden && revert) {
+          promoBanner.style.display = 'none';
+        }
+        delete promoBanner._wasHidden;
+      }
+
       getAllEditableEls().forEach(({ el }) => {
         el.removeAttribute('contenteditable');
         el.classList.remove('em-editable', 'em-selected');
@@ -5424,14 +5670,48 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         // Revert global styles
         document.body.style.background = originalStyles.bodyBg;
-        document.body.style.fontFamily = '';
+        document.body.style.color = originalStyles.bodyColor;
+        document.body.style.fontSize = originalStyles.bodyFontSize;
+        document.body.style.fontFamily = originalStyles.globalFont;
         const footer = document.querySelector('.site-footer');
         if (footer) {
           footer.style.background = originalStyles.footerBg;
           footer.style.color = originalStyles.footerColor;
         }
-        document.documentElement.style.setProperty('--primary', originalStyles.primaryColor);
-        document.documentElement.style.setProperty('--accent', originalStyles.accentColor);
+        const setV = (p, v) => { if (v) document.documentElement.style.setProperty(p, v); };
+        setV('--primary', originalStyles.primaryColor);
+        setV('--accent', originalStyles.accentColor);
+        setV('--bg', originalStyles.bgColor);
+        setV('--bg-alt', originalStyles.bgAltColor);
+        setV('--surface', originalStyles.surfaceColor);
+        setV('--text-dark', originalStyles.textDarkColor);
+        setV('--text', originalStyles.textColor);
+        setV('--text-muted', originalStyles.textMutedColor);
+        setV('--border', originalStyles.borderColor);
+        setV('--radius-sm', originalStyles.radiusSm);
+        setV('--radius-md', originalStyles.radiusMd);
+        setV('--radius-lg', originalStyles.radiusLg);
+        setV('--radius-xl', originalStyles.radiusXl);
+        // Revert titles
+        document.querySelectorAll('.section-title, .hero-title, .newsletter-title, h1, h2, h3').forEach(el => {
+          el.style.fontFamily = ''; el.style.fontWeight = '';
+        });
+        // Revert buttons
+        document.querySelectorAll('.btn').forEach(btn => {
+          btn.style.borderRadius = '';
+          btn.classList.remove('btn--gradient', 'btn--outline', 'btn--soft');
+        });
+        // Revert header
+        const headerEl = document.querySelector('.site-header');
+        if (headerEl) { headerEl.style.background = ''; headerEl.style.boxShadow = ''; }
+        document.querySelectorAll('.site-header .nav-link, .site-header .logo-text').forEach(el => { el.style.color = ''; });
+        // Revert icon colors
+        document.querySelectorAll('.trust-icon svg, .benefit-icon svg, .newsletter-icon svg, .feature-icon svg, .contact-icon svg, .faq-icon svg, .section-label svg').forEach(svg => {
+          svg.style.color = '';
+        });
+        // Revert section spacing & width
+        document.querySelectorAll('section').forEach(sec => { sec.style.paddingTop = ''; sec.style.paddingBottom = ''; });
+        document.querySelectorAll('.section-container').forEach(c => { c.style.maxWidth = ''; });
         // Revert section order
         revertSectionOrder();
         // Remove animation
@@ -5477,15 +5757,47 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Global styles
+        const rootCs = getComputedStyle(document.documentElement);
+        const getV = (v) => rootCs.getPropertyValue(v).trim();
         const globalStyles = {
           bodyBg: document.body.style.background || '',
+          bodyColor: document.body.style.color || '',
+          bodyFontSize: document.body.style.fontSize || '',
           globalFont: document.body.style.fontFamily || '',
+          titleFont: document.querySelector('.section-title')?.style.fontFamily || '',
+          titleWeight: document.querySelector('.section-title')?.style.fontWeight || '',
           footerBg: document.querySelector('.site-footer')?.style.background || '',
           footerColor: document.querySelector('.site-footer')?.style.color || '',
-          primaryColor: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim(),
-          accentColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+          footerLinkColor: document.querySelector('.footer-links a')?.style.color || document.querySelector('.footer-link')?.style.color || '',
+          headerBg: document.querySelector('.site-header')?.style.background || '',
+          headerTextColor: document.querySelector('.site-header .nav-link')?.style.color || document.querySelector('.site-header .logo-text h1')?.style.color || '',
+          primaryColor: getV('--primary'),
+          accentColor: getV('--accent'),
+          bgColor: getV('--bg'),
+          bgAltColor: getV('--bg-alt'),
+          surfaceColor: getV('--surface'),
+          textDarkColor: getV('--text-dark'),
+          textColor: getV('--text'),
+          textMutedColor: getV('--text-muted'),
+          borderColor: getV('--border'),
+          iconColor: getV('--icon-color') || '',
+          radiusMd: getV('--radius-md'),
+          btnRadius: document.querySelector('.btn')?.style.borderRadius || '',
+          shadowLevel: '',
           bgAnimation: currentAnimation,
+          btnStyle: '',
+          sectionSpacing: '',
+          contentWidth: '',
         };
+        // Save select values if panel is open
+        const gBtnStyle = document.getElementById('em-g-btn-style');
+        if (gBtnStyle) globalStyles.btnStyle = gBtnStyle.value;
+        const gShadow = document.getElementById('em-g-shadow');
+        if (gShadow) globalStyles.shadowLevel = gShadow.value;
+        const gSpacing = document.getElementById('em-g-section-spacing');
+        if (gSpacing) globalStyles.sectionSpacing = gSpacing.value;
+        const gWidth = document.getElementById('em-g-content-width');
+        if (gWidth) globalStyles.contentWidth = gWidth.value;
 
         const payload = { content, sectionOrder, globalStyles, savedAt: new Date().toISOString() };
         await supabase.upsertSiteSetting('edit_mode', payload);
@@ -5536,17 +5848,120 @@ document.addEventListener('DOMContentLoaded', () => {
       // Apply global styles
       if (globalStyles) {
         if (globalStyles.bodyBg) document.body.style.background = globalStyles.bodyBg;
+        if (globalStyles.bodyColor) document.body.style.color = globalStyles.bodyColor;
+        if (globalStyles.bodyFontSize) document.body.style.fontSize = globalStyles.bodyFontSize;
         if (globalStyles.globalFont) {
           document.body.style.fontFamily = globalStyles.globalFont;
           loadGoogleFont(globalStyles.globalFont);
         }
+        if (globalStyles.titleFont) {
+          document.querySelectorAll('.section-title, .hero-title, .newsletter-title, h1, h2, h3').forEach(el => {
+            el.style.fontFamily = globalStyles.titleFont;
+          });
+          loadGoogleFont(globalStyles.titleFont);
+        }
+        if (globalStyles.titleWeight) {
+          document.querySelectorAll('.section-title, .hero-title, .newsletter-title, h1, h2, h3').forEach(el => {
+            el.style.fontWeight = globalStyles.titleWeight;
+          });
+        }
+
         const footer = document.querySelector('.site-footer');
         if (footer) {
           if (globalStyles.footerBg) footer.style.background = globalStyles.footerBg;
-          if (globalStyles.footerColor) footer.style.color = globalStyles.footerColor;
+          if (globalStyles.footerColor) {
+            footer.style.color = globalStyles.footerColor;
+            footer.querySelectorAll('.footer-heading, .footer-brand .logo-text h1').forEach(el => {
+              el.style.color = globalStyles.footerColor;
+            });
+          }
         }
-        if (globalStyles.primaryColor) document.documentElement.style.setProperty('--primary', globalStyles.primaryColor);
-        if (globalStyles.accentColor) document.documentElement.style.setProperty('--accent', globalStyles.accentColor);
+        if (globalStyles.footerLinkColor) {
+          const ftr = document.querySelector('.site-footer');
+          if (ftr) {
+            ftr.querySelectorAll('.footer-links a, .footer-link').forEach(a => { a.style.color = globalStyles.footerLinkColor; });
+            ftr.querySelectorAll('.footer-desc, .footer-badge, .footer-bottom p, .footer-bottom-links a').forEach(el => {
+              el.style.color = globalStyles.footerLinkColor;
+            });
+            ftr.querySelectorAll('.social-icon').forEach(el => {
+              el.style.color = globalStyles.footerLinkColor;
+              el.style.borderColor = globalStyles.footerLinkColor;
+            });
+          }
+        }
+
+        const headerEl = document.querySelector('.site-header');
+        if (headerEl && globalStyles.headerBg) headerEl.style.background = globalStyles.headerBg;
+        if (globalStyles.headerTextColor) {
+          document.querySelectorAll('.site-header .nav-link, .site-header .logo-text, .site-header .logo-text h1').forEach(el => {
+            el.style.color = globalStyles.headerTextColor;
+          });
+        }
+
+        // CSS custom properties
+        const setV = (prop, val) => { if (val) document.documentElement.style.setProperty(prop, val); };
+        setV('--primary', globalStyles.primaryColor);
+        if (globalStyles.primaryColor) {
+          setV('--primary-mid', adjustBrightness(globalStyles.primaryColor, -15));
+          setV('--primary-light', adjustBrightness(globalStyles.primaryColor, 30));
+          setV('--primary-soft', adjustBrightness(globalStyles.primaryColor, 50));
+          setV('--primary-pale', adjustBrightness(globalStyles.primaryColor, 70));
+        }
+        setV('--accent', globalStyles.accentColor);
+        if (globalStyles.accentColor) {
+          setV('--accent-light', adjustBrightness(globalStyles.accentColor, 20));
+          setV('--accent-pale', adjustBrightness(globalStyles.accentColor, 50));
+        }
+        setV('--bg', globalStyles.bgColor);
+        setV('--bg-alt', globalStyles.bgAltColor);
+        setV('--surface', globalStyles.surfaceColor);
+        setV('--text-dark', globalStyles.textDarkColor);
+        setV('--text', globalStyles.textColor);
+        setV('--text-muted', globalStyles.textMutedColor);
+        setV('--border', globalStyles.borderColor);
+        if (globalStyles.borderColor) setV('--border-light', adjustBrightness(globalStyles.borderColor, 10));
+        if (globalStyles.iconColor) {
+          setV('--icon-color', globalStyles.iconColor);
+          document.querySelectorAll('.trust-icon svg, .benefit-icon svg, .newsletter-icon svg, .feature-icon svg, .contact-icon svg, .faq-icon svg, .section-label svg').forEach(svg => {
+            svg.style.color = globalStyles.iconColor;
+          });
+        }
+        if (globalStyles.radiusMd) {
+          const r = parseInt(globalStyles.radiusMd);
+          setV('--radius-sm', Math.max(0, r - 4) + 'px');
+          setV('--radius-md', r + 'px');
+          setV('--radius-lg', (r + 4) + 'px');
+          setV('--radius-xl', (r + 12) + 'px');
+        }
+        if (globalStyles.btnRadius) {
+          document.querySelectorAll('.btn').forEach(btn => { btn.style.borderRadius = globalStyles.btnRadius; });
+        }
+        if (globalStyles.btnStyle) {
+          document.querySelectorAll('.btn-primary').forEach(btn => {
+            btn.classList.remove('btn--gradient', 'btn--outline', 'btn--soft');
+            btn.classList.add('btn--' + globalStyles.btnStyle);
+          });
+        }
+        if (globalStyles.shadowLevel) {
+          const shadows = { 'none': '0 0 0 transparent', 'soft': '0 2px 10px rgba(59,34,24,0.04)', 'medium': '0 4px 20px rgba(59,34,24,0.07)', 'strong': '0 8px 40px rgba(59,34,24,0.12)' };
+          if (shadows[globalStyles.shadowLevel]) {
+            setV('--shadow-sm', shadows[globalStyles.shadowLevel]);
+            setV('--shadow-md', shadows[globalStyles.shadowLevel]);
+            setV('--shadow-lg', shadows[globalStyles.shadowLevel]);
+          }
+        }
+        if (globalStyles.sectionSpacing) {
+          const vals = { compact: '40px', normal: '70px', comfortable: '100px', spacious: '130px' };
+          if (vals[globalStyles.sectionSpacing]) {
+            document.querySelectorAll('section').forEach(sec => {
+              sec.style.paddingTop = vals[globalStyles.sectionSpacing];
+              sec.style.paddingBottom = vals[globalStyles.sectionSpacing];
+            });
+          }
+        }
+        if (globalStyles.contentWidth) {
+          document.querySelectorAll('.section-container').forEach(c => { c.style.maxWidth = globalStyles.contentWidth; });
+        }
         if (globalStyles.bgAnimation && globalStyles.bgAnimation !== 'none') {
           createBgAnimation(globalStyles.bgAnimation);
         }
@@ -5595,7 +6010,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.dataset.sectionId = cfg.id;
         btn.innerHTML = `
           <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-          ${cfg.icon} Editar ${cfg.label}`;
+          ${cfg.icon} <span class="em-edit-label">Editar ${cfg.label}</span>`;
         btn.addEventListener('click', (e) => {
           e.preventDefault(); e.stopPropagation();
           openSectionPanel(cfg.id);
@@ -5613,7 +6028,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const cfg = SECTION_CONFIG.find(c => c.id === sectionId);
       if (!cfg) return;
       currentPanelSection = sectionId;
-      panelTitle.textContent = cfg.icon + ' Editar ' + cfg.label;
+      panelTitle.innerHTML = cfg.icon + ' Editar ' + cfg.label;
       panelBody.innerHTML = '';
 
       buildPanelContent(cfg);
@@ -5836,7 +6251,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const banner = document.querySelector('.promo-banner');
       const promoText = document.getElementById('promo-text');
       if (!banner) return;
-      const isVisible = banner.style.display !== 'none';
+      // In edit mode, banner is always visible; check the inactive class to determine actual state
+      const isActive = !banner.classList.contains('em-promo-inactive');
       const sec = document.createElement('div');
       sec.className = 'em-panel-section';
       sec.innerHTML = `
@@ -5844,7 +6260,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="em-panel-special">
           <div class="em-panel-tool-row">
             <label>Ativo</label>
-            <label class="em-panel-check-label"><input type="checkbox" id="em-p-promo-active" ${isVisible ? 'checked' : ''}> Banner visível</label>
+            <label class="em-panel-check-label"><input type="checkbox" id="em-p-promo-active" ${isActive ? 'checked' : ''}> Banner visível</label>
           </div>
           <div class="em-panel-tool-row" style="margin-top:8px;">
             <label>Texto</label>
@@ -5855,7 +6271,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
       document.getElementById('em-p-promo-active')?.addEventListener('change', async (e) => {
         const active = e.target.checked;
-        banner.style.display = active ? '' : 'none';
+        if (active) {
+          banner.style.display = '';
+          banner.classList.remove('em-promo-inactive');
+          banner._wasHidden = false;
+        } else {
+          // In edit mode, keep visible but show as inactive
+          banner.classList.add('em-promo-inactive');
+          banner._wasHidden = true;
+        }
         const text = document.getElementById('em-p-promo-text')?.value || promoText?.textContent?.trim() || '';
         try {
           await supabase.upsertSiteSetting('promo_banner', { active, text });
@@ -5962,52 +6386,212 @@ document.addEventListener('DOMContentLoaded', () => {
     // ===================== GLOBAL SETTINGS PANEL =====================
     function openGlobalPanel() {
       currentPanelSection = 'global';
-      panelTitle.textContent = '⚙ Configurações Globais';
+      panelTitle.innerHTML = EM_ICONS.settings + ' Configurações Globais';
       panelBody.innerHTML = '';
 
-      const cs = getComputedStyle(document.body);
       const rootCs = getComputedStyle(document.documentElement);
-      const currentBg = rgbToHex(cs.backgroundColor || '#FDF9F8');
-      const currentBg2 = rgbToHex(rootCs.getPropertyValue('--bg-alt').trim() || '#F9F3F0');
-      const currentPrimary = rgbToHex(rootCs.getPropertyValue('--primary').trim() || '#C4879A');
-      const currentAccent = rgbToHex(rootCs.getPropertyValue('--accent').trim() || '#8B5A2B');
-      const currentAnim = bgAnimationEl ? (bgAnimationEl.className.match(/em-bg-anim--(\S+)/)?.[1] || 'none') : 'none';
+      const getVar = (v, fb) => rgbToHex(rootCs.getPropertyValue(v).trim() || fb);
 
-      panelBody.innerHTML = `
-        <div class="em-panel-section">
-          <h4 class="em-panel-section-title">🎨 Cores do Site</h4>
-          <div class="em-panel-tool-row">
-            <label>Fundo</label>
-            <input type="color" class="em-panel-color" id="em-g-bg-color" value="${currentBg}">
+      const currentPrimary  = getVar('--primary', '#C4879A');
+      const currentAccent   = getVar('--accent', '#8B5A2B');
+      const currentBg       = getVar('--bg', '#FDF9F8');
+      const currentBgAlt    = getVar('--bg-alt', '#F9F3F0');
+      const currentSurface  = getVar('--surface', '#FFFFFF');
+      const currentTextDark = getVar('--text-dark', '#3B2218');
+      const currentText     = getVar('--text', '#5E4438');
+      const currentTextMuted= getVar('--text-muted', '#9A857B');
+      const currentBorder   = getVar('--border', '#F0E4DE');
+      const currentAnim     = bgAnimationEl ? (bgAnimationEl.className.match(/em-bg-anim--(\S+)/)?.[1] || 'none') : 'none';
+
+      const curFont = document.body.style.fontFamily || '';
+      const curTitleFont = document.querySelector('.section-title')?.style.fontFamily || '';
+      const curBodyRadius = rootCs.getPropertyValue('--radius-md').trim() || '12px';
+      const curBtnRadius = rootCs.getPropertyValue('--radius-sm').trim() || '8px';
+
+      // Helper for collapsible section
+      const collapsible = (id, icon, title, content, open) => `
+        <div class="em-gpanel-group ${open ? 'em-gpanel-group--open' : ''}" id="em-ggroup-${id}">
+          <button type="button" class="em-gpanel-group-header" data-group="${id}">
+            <span class="em-gpanel-group-icon">${icon}</span>
+            <span class="em-gpanel-group-title">${title}</span>
+            <svg class="em-gpanel-chevron" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div class="em-gpanel-group-body">${content}</div>
+        </div>`;
+
+      const colorRow = (id, label, value, desc) => `
+        <div class="em-gpanel-color-row">
+          <div class="em-gpanel-color-info">
+            <label for="${id}">${label}</label>
+            ${desc ? `<small>${desc}</small>` : ''}
           </div>
-          <div class="em-panel-tool-row">
-            <label>Fundo 2</label>
-            <input type="color" class="em-panel-color" id="em-g-bg-color2" value="${currentBg2}">
+          <div class="em-gpanel-color-ctrl">
+            <input type="color" id="${id}" value="${value}">
+            <span class="em-gpanel-color-hex">${value}</span>
           </div>
-          <div class="em-panel-tool-row">
-            <label class="em-panel-check-label"><input type="checkbox" id="em-g-bg-gradient"> Usar Degradê</label>
-          </div>
-          <div class="em-panel-tool-row">
-            <label>Primária</label>
-            <input type="color" class="em-panel-color" id="em-g-primary" value="${currentPrimary}">
-          </div>
-          <div class="em-panel-tool-row">
-            <label>Destaque</label>
-            <input type="color" class="em-panel-color" id="em-g-accent" value="${currentAccent}">
-          </div>
+        </div>`;
+
+      // ── Section 1: Color Palette ──
+      const colorsHTML = `
+        <div class="em-gpanel-subsection">
+          <h5 class="em-gpanel-sub-title">${_i('M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01')} Cores Principais</h5>
+          ${colorRow('em-g-primary', 'Cor Primária', currentPrimary, 'Botões, links, ícones e destaques')}
+          ${colorRow('em-g-accent', 'Cor de Destaque', currentAccent, 'Badges, elementos de ênfase')}
         </div>
-        <div class="em-panel-section">
-          <h4 class="em-panel-section-title">🔤 Tipografia</h4>
-          <div class="em-panel-tool-row">
-            <label>Fonte</label>
-            <select class="em-panel-select" id="em-g-font">${FONT_OPTIONS_HTML}</select>
-          </div>
+        <div class="em-gpanel-subsection">
+          <h5 class="em-gpanel-sub-title">${_i('M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z')} Fundos</h5>
+          ${colorRow('em-g-bg', 'Fundo Principal', currentBg, 'Cor de fundo geral do site')}
+          ${colorRow('em-g-bg-alt', 'Fundo Alternativo', currentBgAlt, 'Seções alternadas e cards')}
+          ${colorRow('em-g-surface', 'Superfície (Cards)', currentSurface, 'Fundo de cards e modais')}
         </div>
-        <div class="em-panel-section">
-          <h4 class="em-panel-section-title">✨ Animação de Fundo</h4>
-          <div class="em-panel-tool-row">
-            <label>Tipo</label>
-            <select class="em-panel-select" id="em-g-animation">
+        <div class="em-gpanel-subsection">
+          <h5 class="em-gpanel-sub-title">${_i('M4 6h16M4 12h8m-8 6h16')} Textos</h5>
+          ${colorRow('em-g-text-dark', 'Títulos', currentTextDark, 'Cor dos títulos e textos fortes')}
+          ${colorRow('em-g-text', 'Corpo', currentText, 'Cor do texto geral do site')}
+          ${colorRow('em-g-text-muted', 'Secundário', currentTextMuted, 'Labels, notas e texto sutil')}
+        </div>
+        <div class="em-gpanel-subsection">
+          <h5 class="em-gpanel-sub-title">${_i('M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z')} Bordas & Ícones</h5>
+          ${colorRow('em-g-border', 'Bordas', currentBorder, 'Linhas divisórias e bordas de inputs')}
+          ${colorRow('em-g-icon-color', 'Ícones Gerais', currentPrimary, 'Cor padrão dos ícones SVG do site')}
+        </div>
+        <div class="em-gpanel-preset-bar">
+          <small>Paletas prontas:</small>
+          <button class="em-gpanel-preset" data-preset="rose" title="Rose Gold (Padrão)"><span style="background:linear-gradient(135deg,#C4879A,#8B5A2B)"></span></button>
+          <button class="em-gpanel-preset" data-preset="lavender" title="Lavanda Elegante"><span style="background:linear-gradient(135deg,#9B8EC4,#6B5B95)"></span></button>
+          <button class="em-gpanel-preset" data-preset="ocean" title="Oceano Suave"><span style="background:linear-gradient(135deg,#5B9BD5,#2E75B6)"></span></button>
+          <button class="em-gpanel-preset" data-preset="forest" title="Floresta Verde"><span style="background:linear-gradient(135deg,#6BAF6E,#3D7A3F)"></span></button>
+          <button class="em-gpanel-preset" data-preset="sunset" title="Pôr do Sol"><span style="background:linear-gradient(135deg,#E8846B,#C0392B)"></span></button>
+          <button class="em-gpanel-preset" data-preset="midnight" title="Midnight Premium"><span style="background:linear-gradient(135deg,#2C3E50,#BDC3C7)"></span></button>
+        </div>`;
+
+      // ── Section 2: Typography ──
+      const typoHTML = `
+        <div class="em-gpanel-subsection">
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Fonte do Corpo</label>
+              <small>Textos, descrições e parágrafos</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-font">${FONT_OPTIONS_HTML}</select>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Fonte dos Títulos</label>
+              <small>Títulos de seção e headings</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-title-font">${FONT_OPTIONS_HTML}</select>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Tamanho Base</label>
+              <small>Tamanho padrão do texto geral</small>
+            </div>
+            <div class="em-gpanel-range-wrap">
+              <input type="range" id="em-g-font-size" min="13" max="20" value="16" step="1">
+              <span class="em-gpanel-range-val" id="em-g-font-size-val">16px</span>
+            </div>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Peso dos Títulos</label>
+              <small>Bold ou extra-bold</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-title-weight">
+              <option value="">Padrão</option>
+              <option value="500">Medium (500)</option>
+              <option value="600">Semibold (600)</option>
+              <option value="700">Bold (700)</option>
+              <option value="800">Extra Bold (800)</option>
+            </select>
+          </div>
+        </div>`;
+
+      // ── Section 3: Buttons & Cards (Border Radius) ──
+      const shapeHTML = `
+        <div class="em-gpanel-subsection">
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Arredondamento Geral</label>
+              <small>Cantos de cards, inputs e contêineres</small>
+            </div>
+            <div class="em-gpanel-range-wrap">
+              <input type="range" id="em-g-radius" min="0" max="30" value="${parseInt(curBodyRadius)}" step="1">
+              <span class="em-gpanel-range-val" id="em-g-radius-val">${parseInt(curBodyRadius)}px</span>
+            </div>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Arredondamento de Botões</label>
+              <small>Cantos dos botões e badges</small>
+            </div>
+            <div class="em-gpanel-range-wrap">
+              <input type="range" id="em-g-btn-radius" min="0" max="50" value="${parseInt(curBtnRadius)}" step="1">
+              <span class="em-gpanel-range-val" id="em-g-btn-radius-val">${parseInt(curBtnRadius)}px</span>
+            </div>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Estilo dos Botões</label>
+              <small>Aparência dos botões de ação</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-btn-style">
+              <option value="">Padrão (Sólido)</option>
+              <option value="gradient">Gradiente</option>
+              <option value="outline">Contorno</option>
+              <option value="soft">Suave</option>
+            </select>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Sombras</label>
+              <small>Intensidade das sombras nos cards</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-shadow">
+              <option value="">Padrão</option>
+              <option value="none">Sem Sombra</option>
+              <option value="soft">Suave</option>
+              <option value="medium">Média</option>
+              <option value="strong">Forte</option>
+            </select>
+          </div>
+        </div>`;
+
+      // ── Section 4: Header & Navigation ──
+      const headerHTML = `
+        <div class="em-gpanel-subsection">
+          ${colorRow('em-g-header-bg', 'Fundo do Header', rgbToHex(getComputedStyle(document.querySelector('.site-header') || document.body).backgroundColor || '#FFFFFF'), 'Cor de fundo do menu superior')}
+          ${colorRow('em-g-header-text', 'Texto do Header', rgbToHex(getComputedStyle(document.querySelector('.site-header .nav-link') || document.body).color || '#5E4438'), 'Cor dos links de navegação')}
+          <div class="em-gpanel-color-row">
+            <div class="em-gpanel-color-info">
+              <label>Header Transparente</label>
+              <small>Header com fundo transparente no topo</small>
+            </div>
+            <label class="em-gpanel-toggle">
+              <input type="checkbox" id="em-g-header-transparent">
+              <span class="em-gpanel-toggle-slider"></span>
+            </label>
+          </div>
+        </div>`;
+
+      // ── Section 5: Footer ──
+      const footerEl = document.querySelector('.site-footer');
+      const footerHTML = `
+        <div class="em-gpanel-subsection">
+          ${colorRow('em-g-footer-bg', 'Fundo do Footer', rgbToHex(getComputedStyle(footerEl || document.body).backgroundColor || '#1a1a2e'), 'Cor de fundo do rodapé')}
+          ${colorRow('em-g-footer-text', 'Texto do Footer', rgbToHex(getComputedStyle(footerEl || document.body).color || '#FFFFFF'), 'Cor do texto do rodapé')}
+          ${colorRow('em-g-footer-link', 'Links do Footer', rgbToHex(getComputedStyle(document.querySelector('.footer-link') || footerEl || document.body).color || '#DAADB8'), 'Cor dos links no rodapé')}
+        </div>`;
+
+      // ── Section 6: Animations ──
+      const animHTML = `
+        <div class="em-gpanel-subsection">
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Animação de Fundo</label>
+              <small>Efeito decorativo sutil no fundo do site</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-animation">
               <option value="none" ${currentAnim==='none'?'selected':''}>Nenhuma</option>
               <option value="particles" ${currentAnim==='particles'?'selected':''}>Partículas</option>
               <option value="gradient-flow" ${currentAnim==='gradient-flow'?'selected':''}>Degradê Fluido</option>
@@ -6016,47 +6600,393 @@ document.addEventListener('DOMContentLoaded', () => {
               <option value="waves" ${currentAnim==='waves'?'selected':''}>Ondas</option>
             </select>
           </div>
-        </div>
-      `;
+          <div class="em-gpanel-color-row">
+            <div class="em-gpanel-color-info">
+              <label>Scroll Suave</label>
+              <small>Rolagem suave ao clicar em links</small>
+            </div>
+            <label class="em-gpanel-toggle">
+              <input type="checkbox" id="em-g-smooth-scroll" checked>
+              <span class="em-gpanel-toggle-slider"></span>
+            </label>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Animações de Entrada</label>
+              <small>Como as seções aparecem ao rolar</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-reveal-style">
+              <option value="">Padrão (Fade Up)</option>
+              <option value="fade">Apenas Fade</option>
+              <option value="slide-left">Deslizar da Esquerda</option>
+              <option value="slide-right">Deslizar da Direita</option>
+              <option value="zoom">Zoom In</option>
+              <option value="none">Sem Animação</option>
+            </select>
+          </div>
+        </div>`;
 
-      // Sync font select
-      const globalFontSel = document.getElementById('em-g-font');
-      const curFont = document.body.style.fontFamily || '';
-      if (globalFontSel && curFont) {
-        for (const opt of globalFontSel.options) {
-          if (opt.value && curFont.includes(opt.value.split(',')[0].replace(/'/g, ''))) {
-            globalFontSel.value = opt.value; break;
+      // ── Section 7: Spacing ──
+      const spacingHTML = `
+        <div class="em-gpanel-subsection">
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Espaçamento entre Seções</label>
+              <small>Distância vertical entre blocos</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-section-spacing">
+              <option value="">Padrão</option>
+              <option value="compact">Compacto</option>
+              <option value="normal">Normal</option>
+              <option value="comfortable">Confortável</option>
+              <option value="spacious">Espaçoso</option>
+            </select>
+          </div>
+          <div class="em-gpanel-select-row">
+            <div class="em-gpanel-select-info">
+              <label>Largura do Conteúdo</label>
+              <small>Largura máxima da área de conteúdo</small>
+            </div>
+            <select class="em-gpanel-select" id="em-g-content-width">
+              <option value="">Padrão (1280px)</option>
+              <option value="1100px">Compacto (1100px)</option>
+              <option value="1280px">Normal (1280px)</option>
+              <option value="1440px">Largo (1440px)</option>
+              <option value="100%">Full Width</option>
+            </select>
+          </div>
+        </div>`;
+
+      // Assemble panel
+      panelBody.innerHTML = `
+        <div class="em-gpanel-wrapper">
+          ${collapsible('colors', EM_ICONS.palette, 'Paleta de Cores', colorsHTML, true)}
+          ${collapsible('typography', EM_ICONS.type, 'Tipografia', typoHTML, false)}
+          ${collapsible('shapes', EM_ICONS.shapes, 'Formas & Botões', shapeHTML, false)}
+          ${collapsible('header', EM_ICONS.compass, 'Header & Navegação', headerHTML, false)}
+          ${collapsible('footer', EM_ICONS.footer, 'Rodapé', footerHTML, false)}
+          ${collapsible('animations', EM_ICONS.sparkle, 'Animações & Efeitos', animHTML, false)}
+          ${collapsible('spacing', EM_ICONS.ruler, 'Espaçamento & Layout', spacingHTML, false)}
+        </div>`;
+
+      // ── Initialize collapsible groups ──
+      panelBody.querySelectorAll('.em-gpanel-group-header').forEach(header => {
+        header.addEventListener('click', () => {
+          const group = header.closest('.em-gpanel-group');
+          group.classList.toggle('em-gpanel-group--open');
+        });
+      });
+
+      // ── Sync select values ──
+      const syncFont = (selectId, curValue) => {
+        const sel = document.getElementById(selectId);
+        if (sel && curValue) {
+          for (const opt of sel.options) {
+            if (opt.value && curValue.includes(opt.value.split(',')[0].replace(/'/g, ''))) {
+              sel.value = opt.value; break;
+            }
           }
         }
-      }
+      };
+      syncFont('em-g-font', curFont);
+      syncFont('em-g-title-font', curTitleFont);
 
-      // Event handlers
-      document.getElementById('em-g-bg-color')?.addEventListener('input', () => applyGlobalBg());
-      document.getElementById('em-g-bg-color2')?.addEventListener('input', () => applyGlobalBg());
-      document.getElementById('em-g-bg-gradient')?.addEventListener('change', () => applyGlobalBg());
-      document.getElementById('em-g-primary')?.addEventListener('input', (e) => {
-        const hex = e.target.value;
+      // Sync hex labels on load
+      panelBody.querySelectorAll('input[type="color"]').forEach(inp => {
+        const hexSpan = inp.parentElement?.querySelector('.em-gpanel-color-hex');
+        if (hexSpan) inp.addEventListener('input', () => { hexSpan.textContent = inp.value; });
+      });
+
+      // ── Color event handlers ──
+      const applyPrimary = (hex) => {
         document.documentElement.style.setProperty('--primary', hex);
         document.documentElement.style.setProperty('--primary-mid', adjustBrightness(hex, -15));
         document.documentElement.style.setProperty('--primary-light', adjustBrightness(hex, 30));
         document.documentElement.style.setProperty('--primary-soft', adjustBrightness(hex, 50));
         document.documentElement.style.setProperty('--primary-pale', adjustBrightness(hex, 70));
         markGlobalChanged('primary');
-      });
-      document.getElementById('em-g-accent')?.addEventListener('input', (e) => {
-        document.documentElement.style.setProperty('--accent', e.target.value);
-        document.documentElement.style.setProperty('--accent-light', adjustBrightness(e.target.value, 20));
+      };
+      const applyAccent = (hex) => {
+        document.documentElement.style.setProperty('--accent', hex);
+        document.documentElement.style.setProperty('--accent-light', adjustBrightness(hex, 20));
+        document.documentElement.style.setProperty('--accent-pale', adjustBrightness(hex, 50));
         markGlobalChanged('accent');
+      };
+
+      document.getElementById('em-g-primary')?.addEventListener('input', e => applyPrimary(e.target.value));
+      document.getElementById('em-g-accent')?.addEventListener('input', e => applyAccent(e.target.value));
+
+      document.getElementById('em-g-bg')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--bg', e.target.value);
+        applyGlobalBg();
       });
-      document.getElementById('em-g-font')?.addEventListener('change', (e) => {
+      document.getElementById('em-g-bg-alt')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--bg-alt', e.target.value);
+        applyGlobalBg();
+      });
+      document.getElementById('em-g-surface')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--surface', e.target.value);
+        markGlobalChanged('surface');
+      });
+
+      document.getElementById('em-g-text-dark')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--text-dark', e.target.value);
+        markGlobalChanged('textDark');
+      });
+      document.getElementById('em-g-text')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--text', e.target.value);
+        document.body.style.color = e.target.value;
+        markGlobalChanged('text');
+      });
+      document.getElementById('em-g-text-muted')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--text-muted', e.target.value);
+        markGlobalChanged('textMuted');
+      });
+      document.getElementById('em-g-border')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--border', e.target.value);
+        document.documentElement.style.setProperty('--border-light', adjustBrightness(e.target.value, 10));
+        markGlobalChanged('border');
+      });
+      document.getElementById('em-g-icon-color')?.addEventListener('input', e => {
+        document.documentElement.style.setProperty('--icon-color', e.target.value);
+        document.querySelectorAll('.trust-icon svg, .benefit-icon svg, .newsletter-icon svg, .feature-icon svg, .contact-icon svg, .faq-icon svg, .section-label svg').forEach(svg => {
+          svg.style.color = e.target.value;
+        });
+        markGlobalChanged('iconColor');
+      });
+
+      // ── Typography handlers ──
+      document.getElementById('em-g-font')?.addEventListener('change', e => {
         document.body.style.fontFamily = e.target.value || '';
         if (e.target.value) loadGoogleFont(e.target.value);
         markGlobalChanged('font');
       });
-      document.getElementById('em-g-animation')?.addEventListener('change', (e) => {
+      document.getElementById('em-g-title-font')?.addEventListener('change', e => {
+        const val = e.target.value || '';
+        document.querySelectorAll('.section-title, .hero-title, .newsletter-title, h1, h2, h3').forEach(el => {
+          el.style.fontFamily = val;
+        });
+        if (val) loadGoogleFont(val);
+        markGlobalChanged('titleFont');
+      });
+      document.getElementById('em-g-font-size')?.addEventListener('input', e => {
+        const v = e.target.value;
+        document.getElementById('em-g-font-size-val').textContent = v + 'px';
+        document.body.style.fontSize = v + 'px';
+        markGlobalChanged('fontSize');
+      });
+      document.getElementById('em-g-title-weight')?.addEventListener('change', e => {
+        const val = e.target.value || '';
+        document.querySelectorAll('.section-title, .hero-title, .newsletter-title, h1, h2, h3').forEach(el => {
+          el.style.fontWeight = val;
+        });
+        markGlobalChanged('titleWeight');
+      });
+
+      // ── Shape handlers ──
+      document.getElementById('em-g-radius')?.addEventListener('input', e => {
+        const v = e.target.value;
+        document.getElementById('em-g-radius-val').textContent = v + 'px';
+        document.documentElement.style.setProperty('--radius-sm', Math.max(0, v - 4) + 'px');
+        document.documentElement.style.setProperty('--radius-md', v + 'px');
+        document.documentElement.style.setProperty('--radius-lg', (parseInt(v) + 4) + 'px');
+        document.documentElement.style.setProperty('--radius-xl', (parseInt(v) + 12) + 'px');
+        markGlobalChanged('radius');
+      });
+      document.getElementById('em-g-btn-radius')?.addEventListener('input', e => {
+        const v = e.target.value;
+        document.getElementById('em-g-btn-radius-val').textContent = v + 'px';
+        document.querySelectorAll('.btn').forEach(btn => { btn.style.borderRadius = v + 'px'; });
+        markGlobalChanged('btnRadius');
+      });
+      document.getElementById('em-g-btn-style')?.addEventListener('change', e => {
+        const style = e.target.value;
+        document.querySelectorAll('.btn-primary').forEach(btn => {
+          btn.classList.remove('btn--gradient', 'btn--outline', 'btn--soft');
+          if (style) btn.classList.add('btn--' + style);
+        });
+        markGlobalChanged('btnStyle');
+      });
+      document.getElementById('em-g-shadow')?.addEventListener('change', e => {
+        const v = e.target.value;
+        const shadows = {
+          'none': '0 0 0 transparent',
+          'soft': '0 2px 10px rgba(59,34,24,0.04)',
+          'medium': '0 4px 20px rgba(59,34,24,0.07)',
+          'strong': '0 8px 40px rgba(59,34,24,0.12)',
+        };
+        if (v && shadows[v]) {
+          document.documentElement.style.setProperty('--shadow-sm', shadows[v]);
+          document.documentElement.style.setProperty('--shadow-md', shadows[v]);
+          document.documentElement.style.setProperty('--shadow-lg', shadows[v]);
+        }
+        markGlobalChanged('shadow');
+      });
+
+      // ── Header handlers ──
+      document.getElementById('em-g-header-bg')?.addEventListener('input', e => {
+        const header = document.querySelector('.site-header');
+        if (header) header.style.background = e.target.value;
+        markGlobalChanged('headerBg');
+      });
+      document.getElementById('em-g-header-text')?.addEventListener('input', e => {
+        document.querySelectorAll('.site-header .nav-link, .site-header .logo-text').forEach(el => {
+          el.style.color = e.target.value;
+        });
+        markGlobalChanged('headerText');
+      });
+      document.getElementById('em-g-header-transparent')?.addEventListener('change', e => {
+        const header = document.querySelector('.site-header');
+        if (header) {
+          if (e.target.checked) { header.style.background = 'transparent'; header.style.boxShadow = 'none'; }
+          else { header.style.background = ''; header.style.boxShadow = ''; }
+        }
+        markGlobalChanged('headerTransparent');
+      });
+
+      // ── Footer handlers ──
+      document.getElementById('em-g-footer-bg')?.addEventListener('input', e => {
+        if (footerEl) footerEl.style.background = e.target.value;
+        markGlobalChanged('footerBg');
+      });
+      document.getElementById('em-g-footer-text')?.addEventListener('input', e => {
+        if (footerEl) {
+          footerEl.style.color = e.target.value;
+          footerEl.querySelectorAll('.footer-heading, .footer-brand .logo-text h1').forEach(el => {
+            el.style.color = e.target.value;
+          });
+        }
+        markGlobalChanged('footerColor');
+      });
+      document.getElementById('em-g-footer-link')?.addEventListener('input', e => {
+        const ftr = document.querySelector('.site-footer');
+        if (ftr) {
+          ftr.querySelectorAll('.footer-links a, .footer-link').forEach(a => { a.style.color = e.target.value; });
+          ftr.querySelectorAll('.footer-desc, .footer-badge, .footer-bottom p, .footer-bottom-links a').forEach(el => {
+            el.style.color = e.target.value;
+          });
+          ftr.querySelectorAll('.social-icon').forEach(el => {
+            el.style.color = e.target.value;
+            el.style.borderColor = e.target.value;
+          });
+        }
+        markGlobalChanged('footerLink');
+      });
+
+      // ── Animation handlers ──
+      document.getElementById('em-g-animation')?.addEventListener('change', e => {
         removeBgAnimation();
         if (e.target.value !== 'none') createBgAnimation(e.target.value);
         markGlobalChanged('animation');
+      });
+      document.getElementById('em-g-smooth-scroll')?.addEventListener('change', e => {
+        document.documentElement.style.scrollBehavior = e.target.checked ? 'smooth' : 'auto';
+        markGlobalChanged('smoothScroll');
+      });
+
+      // ── Spacing handlers ──
+      document.getElementById('em-g-section-spacing')?.addEventListener('change', e => {
+        const v = e.target.value;
+        const vals = { compact: '40px', normal: '70px', comfortable: '100px', spacious: '130px' };
+        document.querySelectorAll('section').forEach(sec => {
+          sec.style.paddingTop = vals[v] || '';
+          sec.style.paddingBottom = vals[v] || '';
+        });
+        markGlobalChanged('sectionSpacing');
+      });
+      document.getElementById('em-g-content-width')?.addEventListener('change', e => {
+        document.querySelectorAll('.section-container').forEach(c => {
+          c.style.maxWidth = e.target.value || '';
+        });
+        markGlobalChanged('contentWidth');
+      });
+
+      // ── Preset palettes ──
+      const PRESETS = {
+        rose:     { primary:'#C4879A', accent:'#8B5A2B', bg:'#FDF9F8', bgAlt:'#F9F3F0', textDark:'#3B2218', text:'#5E4438', muted:'#9A857B', border:'#F0E4DE', surface:'#FFFFFF',
+                    headerBg:'#FFFFFF', headerText:'#5E4438', footerBg:'#F9F0F0', footerText:'#3B2218', footerLink:'#9A857B' },
+        lavender: { primary:'#9B8EC4', accent:'#6B5B95', bg:'#F8F6FD', bgAlt:'#F0EDF8', textDark:'#2D2445', text:'#4A3F6B', muted:'#8E85A5', border:'#E5E0F0', surface:'#FFFFFF',
+                    headerBg:'#FFFFFF', headerText:'#4A3F6B', footerBg:'#2D2445', footerText:'#FFFFFF', footerLink:'#C4B8E0' },
+        ocean:    { primary:'#5B9BD5', accent:'#2E75B6', bg:'#F5F9FD', bgAlt:'#EBF3FA', textDark:'#1B3A5C', text:'#34628D', muted:'#7FA5C4', border:'#D6E6F5', surface:'#FFFFFF',
+                    headerBg:'#FFFFFF', headerText:'#34628D', footerBg:'#1B3A5C', footerText:'#FFFFFF', footerLink:'#8FBEE8' },
+        forest:   { primary:'#6BAF6E', accent:'#3D7A3F', bg:'#F5FAF5', bgAlt:'#EDF5ED', textDark:'#1C3D1E', text:'#3A6A3C', muted:'#82A884', border:'#D4E8D4', surface:'#FFFFFF',
+                    headerBg:'#FFFFFF', headerText:'#3A6A3C', footerBg:'#1C3D1E', footerText:'#FFFFFF', footerLink:'#8FCC91' },
+        sunset:   { primary:'#E8846B', accent:'#C0392B', bg:'#FEF7F5', bgAlt:'#FCEEE9', textDark:'#4A1A10', text:'#7A3322', muted:'#B08070', border:'#F5DDD5', surface:'#FFFFFF',
+                    headerBg:'#FFFFFF', headerText:'#7A3322', footerBg:'#4A1A10', footerText:'#FFFFFF', footerLink:'#F0A896' },
+        midnight: { primary:'#7F8C9B', accent:'#BDC3C7', bg:'#1A1A2E', bgAlt:'#16213E', textDark:'#ECEFF4', text:'#D8DEE9', muted:'#8B95A5', border:'#2C3E50', surface:'#232640',
+                    headerBg:'#0F0F1E', headerText:'#D8DEE9', footerBg:'#0D0D1A', footerText:'#ECEFF4', footerLink:'#BDC3C7' },
+      };
+
+      panelBody.querySelectorAll('.em-gpanel-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const p = PRESETS[btn.dataset.preset];
+          if (!p) return;
+          // Apply all colors
+          applyPrimary(p.primary);
+          applyAccent(p.accent);
+          document.documentElement.style.setProperty('--bg', p.bg);
+          document.documentElement.style.setProperty('--bg-alt', p.bgAlt);
+          document.documentElement.style.setProperty('--surface', p.surface);
+          document.documentElement.style.setProperty('--text-dark', p.textDark);
+          document.documentElement.style.setProperty('--text', p.text);
+          document.documentElement.style.setProperty('--text-muted', p.muted);
+          document.documentElement.style.setProperty('--border', p.border);
+          document.documentElement.style.setProperty('--border-light', adjustBrightness(p.border, 10));
+          document.body.style.background = p.bg;
+          document.body.style.color = p.text;
+
+          // ── Apply Header colors ──
+          const headerEl = document.querySelector('.site-header');
+          if (headerEl && p.headerBg) {
+            headerEl.style.background = p.headerBg;
+            document.querySelectorAll('.site-header .nav-link, .site-header .logo-text, .site-header .logo-text h1').forEach(el => {
+              el.style.color = p.headerText;
+            });
+          }
+
+          // ── Apply Footer colors ──
+          const fEl = document.querySelector('.site-footer');
+          if (fEl && p.footerBg) {
+            fEl.style.background = p.footerBg;
+            fEl.style.color = p.footerText;
+            // Footer headings
+            fEl.querySelectorAll('.footer-heading, .footer-brand .logo-text h1').forEach(el => {
+              el.style.color = p.footerText;
+            });
+            // Footer description & muted text
+            fEl.querySelectorAll('.footer-desc, .footer-badge, .footer-bottom p, .footer-bottom-links a').forEach(el => {
+              el.style.color = p.footerLink;
+            });
+            // Footer links
+            fEl.querySelectorAll('.footer-links a, .footer-link').forEach(el => {
+              el.style.color = p.footerLink;
+            });
+            // Social icons
+            fEl.querySelectorAll('.social-icon').forEach(el => {
+              el.style.color = p.footerLink;
+              el.style.borderColor = p.footerLink;
+            });
+          }
+
+          // Update all color inputs in the panel
+          const updates = {
+            'em-g-primary': p.primary, 'em-g-accent': p.accent, 'em-g-bg': p.bg,
+            'em-g-bg-alt': p.bgAlt, 'em-g-surface': p.surface, 'em-g-text-dark': p.textDark,
+            'em-g-text': p.text, 'em-g-text-muted': p.muted, 'em-g-border': p.border,
+            'em-g-header-bg': p.headerBg, 'em-g-header-text': p.headerText,
+            'em-g-footer-bg': p.footerBg, 'em-g-footer-text': p.footerText, 'em-g-footer-link': p.footerLink,
+          };
+          Object.entries(updates).forEach(([id, val]) => {
+            const inp = document.getElementById(id);
+            if (inp) {
+              inp.value = val;
+              const hex = inp.parentElement?.querySelector('.em-gpanel-color-hex');
+              if (hex) hex.textContent = val;
+            }
+          });
+          markGlobalChanged('preset');
+          showNotification('Paleta \"' + btn.title + '\" aplicada!');
+        });
       });
 
       // Show panel
@@ -6070,14 +7000,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function applyGlobalBg() {
-      const c1 = document.getElementById('em-g-bg-color')?.value;
-      const c2 = document.getElementById('em-g-bg-color2')?.value;
-      const grad = document.getElementById('em-g-bg-gradient')?.checked;
-      if (grad && c1 && c2) {
-        document.body.style.background = `linear-gradient(180deg, ${c1} 0%, ${c2} 100%)`;
-      } else if (c1) {
+      const c1 = document.getElementById('em-g-bg')?.value || getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+      if (c1) {
         document.body.style.background = c1;
+        document.documentElement.style.setProperty('--bg', c1);
       }
+      const c2 = document.getElementById('em-g-bg-alt')?.value;
+      if (c2) document.documentElement.style.setProperty('--bg-alt', c2);
       markGlobalChanged('bg');
     }
 
@@ -6106,7 +7035,7 @@ document.addEventListener('DOMContentLoaded', () => {
       btnReset.textContent = 'Resetando...';
       try {
         // Clear edit_mode setting in DB
-        await supabase.upsertSiteSetting('edit_mode', null);
+        await supabase.upsertSiteSetting('edit_mode', {});
         showNotification('Resetado ao padrão! Recarregando...');
         setTimeout(() => location.reload(), 800);
       } catch (err) {
@@ -6274,7 +7203,7 @@ document.addEventListener('DOMContentLoaded', () => {
           for (let i = 0; i < 20; i++) {
             const s = document.createElement('span');
             s.className = 'em-sparkle';
-            s.innerHTML = '✦';
+            s.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em"><path d="M12 2l2.4 7.2H22l-6 4.8 2.4 7.2L12 16.8 5.6 21.2 8 14 2 9.2h7.6z"/></svg>';
             s.style.left = Math.random() * 100 + '%';
             s.style.top = Math.random() * 100 + '%';
             s.style.animationDelay = Math.random() * 5 + 's';
@@ -6436,7 +7365,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <input type="text" id="em-cf-${f.name}" name="${f.name}" value="${value}" placeholder="URL da imagem">
             ${previewHtml}
             <div class="em-crud-img-upload-row">
-              <button type="button" class="em-crud-img-upload-btn" id="em-cf-${f.name}-upload-btn">📁 Upload Imagem</button>
+              <button type="button" class="em-crud-img-upload-btn" id="em-cf-${f.name}-upload-btn"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg> Upload Imagem</button>
               <input type="file" id="em-cf-${f.name}-file" accept="image/*" style="display:none">
             </div>`;
         } else {
@@ -6491,7 +7420,7 @@ document.addEventListener('DOMContentLoaded', () => {
           } catch (err) {
             showNotification('Erro no upload: ' + err.message, true);
           } finally {
-            uploadBtn.textContent = '📁 Upload Imagem';
+            uploadBtn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg> Upload Imagem';
             fileInp.value = '';
           }
         });
@@ -6550,11 +7479,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const settings = await supabase.getSiteSettings();
         const settingsMap = {};
         settings.forEach(r => { settingsMap[r.key] = typeof r.value === 'string' ? JSON.parse(r.value) : r.value; });
-        const offersRow = settings.find(r => r.key === 'offers');
-        if (offersRow) {
-          crudOffers = typeof offersRow.value === 'string' ? JSON.parse(offersRow.value) : offersRow.value;
-          if (!Array.isArray(crudOffers)) crudOffers = [];
-        } else crudOffers = [];
+        try { crudOffers = await supabase.getOffers(); } catch(_) { crudOffers = []; }
+        if (!Array.isArray(crudOffers)) crudOffers = [];
         crudTestimonials = settingsMap.testimonials || [];
         crudFaqItems = settingsMap.faq_items || [];
       } catch (e) {
@@ -6594,7 +7520,7 @@ document.addEventListener('DOMContentLoaded', () => {
       bar.className = 'em-crud-bar';
       bar.innerHTML = `<span class="em-crud-bar__label">Produtos</span>
         <button class="em-crud-fab em-crud-fab--add" id="em-crud-add-product">＋ Novo Produto</button>
-        <button class="em-crud-fab" style="background:rgba(59,130,246,0.2);color:#93c5fd;" id="em-crud-manage-cats">📂 Categorias</button>`;
+        <button class="em-crud-fab" style="background:rgba(59,130,246,0.2);color:#93c5fd;" id="em-crud-manage-cats"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg> Categorias</button>`;
       section.appendChild(bar);
 
       document.getElementById('em-crud-add-product')?.addEventListener('click', (e) => {
@@ -6613,8 +7539,8 @@ document.addEventListener('DOMContentLoaded', () => {
         card.style.position = 'relative';
         const actions = document.createElement('div');
         actions.className = 'em-crud-item-actions';
-        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-product="${productId}">✏</button>
-          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-product="${productId}">🗑</button>`;
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-product="${productId}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-product="${productId}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>`;
         card.appendChild(actions);
       });
 
@@ -6654,9 +7580,6 @@ document.addEventListener('DOMContentLoaded', () => {
         { name: 'stock', label: 'Estoque', type: 'number', half: true },
         { name: 'description', label: 'Descrição', type: 'textarea' },
         { name: 'image_url', label: 'Imagem Principal', type: 'image' },
-        { name: 'image_bg', label: 'Gradiente de Fundo', placeholder: 'linear-gradient(135deg, #f0e6f6, #d4c5e0)' },
-        { name: 'rating', label: 'Avaliação', type: 'number', step: '0.1', default: '5.0', half: true },
-        { name: 'reviews_count', label: 'Nº Avaliações', type: 'number', default: '0', half: true },
         { name: 'sort_order', label: 'Ordem', type: 'number', default: '0', half: true },
         { name: 'active', label: 'Ativo', type: 'checkbox', default: true, half: true },
       ];
@@ -6726,8 +7649,8 @@ document.addEventListener('DOMContentLoaded', () => {
           card.style.position = 'relative';
           const actions = document.createElement('div');
           actions.className = 'em-crud-item-actions';
-          actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-product="${productId}">✏</button>
-            <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-product="${productId}">🗑</button>`;
+          actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-product="${productId}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+            <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-product="${productId}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>`;
           card.appendChild(actions);
         });
       }, 800);
@@ -6749,8 +7672,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <span>${statusBadge}</span>
           </div>
           <div style="display:flex;gap:4px;">
-            <button class="em-crud-item-btn em-crud-item-btn--edit" data-crud-edit-cat="${i}" style="width:26px;height:26px;font-size:0.65rem;">✏</button>
-            <button class="em-crud-item-btn em-crud-item-btn--delete" data-crud-del-cat="${i}" style="width:26px;height:26px;font-size:0.65rem;">🗑</button>
+            <button class="em-crud-item-btn em-crud-item-btn--edit" data-crud-edit-cat="${i}" style="width:26px;height:26px;"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+            <button class="em-crud-item-btn em-crud-item-btn--delete" data-crud-del-cat="${i}" style="width:26px;height:26px;"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
           </div>
         </div>`;
       });
@@ -6857,8 +7780,8 @@ document.addEventListener('DOMContentLoaded', () => {
         card.style.position = 'relative';
         const actions = document.createElement('div');
         actions.className = 'em-crud-item-actions';
-        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-offer="${idx}">✏</button>
-          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-offer="${idx}">🗑</button>`;
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-offer="${idx}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-offer="${idx}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>`;
         card.appendChild(actions);
       });
 
@@ -6879,10 +7802,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const realIdx = cardIdx % crudOffers.length;
           if (!confirm('Excluir esta oferta?')) return;
           try {
+            await supabase.deleteOffer(crudOffers[realIdx].id);
             crudOffers.splice(realIdx, 1);
-            await supabase.upsertSiteSetting('offers', crudOffers);
-            const firstActive = crudOffers.find(o => o.active !== false);
-            await supabase.upsertSiteSetting('special_offer', firstActive || { active: false });
             showNotification('Oferta excluída!');
             if (typeof loadSiteSettings === 'function') loadSiteSettings();
           } catch (err) { showNotification('Erro: ' + err.message, true); }
@@ -6912,14 +7833,13 @@ document.addEventListener('DOMContentLoaded', () => {
         async (formData) => {
           formData.price = parseFloat(formData.price) || 0;
           formData.old_price = formData.old_price ? parseFloat(formData.old_price) : 0;
-          if (index >= 0) {
-            crudOffers[index] = formData;
+          formData.product_id = formData.product_id || null;
+          if (index >= 0 && crudOffers[index] && crudOffers[index].id) {
+            await supabase.updateOffer(crudOffers[index].id, formData);
           } else {
-            crudOffers.push(formData);
+            await supabase.createOffer(formData);
           }
-          await supabase.upsertSiteSetting('offers', crudOffers);
-          const firstActive = crudOffers.find(o => o.active !== false);
-          await supabase.upsertSiteSetting('special_offer', firstActive || { active: false });
+          try { crudOffers = await supabase.getOffers(); } catch(_) {}
           showNotification(index >= 0 ? 'Oferta atualizada!' : 'Oferta criada!');
           if (typeof loadSiteSettings === 'function') loadSiteSettings();
         }
@@ -6948,8 +7868,8 @@ document.addEventListener('DOMContentLoaded', () => {
         card.style.position = 'relative';
         const actions = document.createElement('div');
         actions.className = 'em-crud-item-actions';
-        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-test="${i}">✏</button>
-          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-test="${i}">🗑</button>`;
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-test="${i}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-test="${i}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>`;
         card.appendChild(actions);
       });
 
@@ -7030,8 +7950,8 @@ document.addEventListener('DOMContentLoaded', () => {
         item.style.position = 'relative';
         const actions = document.createElement('div');
         actions.className = 'em-crud-item-actions';
-        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-faq="${i}">✏</button>
-          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-faq="${i}">🗑</button>`;
+        actions.innerHTML = `<button class="em-crud-item-btn em-crud-item-btn--edit" title="Editar" data-crud-edit-faq="${i}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+          <button class="em-crud-item-btn em-crud-item-btn--delete" title="Excluir" data-crud-del-faq="${i}"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>`;
         item.appendChild(actions);
       });
 

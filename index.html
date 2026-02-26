@@ -173,6 +173,26 @@
                 Avaliações dos Clientes
               </h4>
               <div class="reviews-list" id="modal-reviews"></div>
+
+              <!-- Review submission form -->
+              <div class="review-form-wrap" id="review-form-wrap">
+                <h5 class="review-form-title">Deixe sua avaliação</h5>
+                <div class="review-form-login-msg" id="review-login-msg" style="display:none;">
+                  <p>Faça login para deixar sua avaliação.</p>
+                </div>
+                <form class="review-form" id="review-form" style="display:none;">
+                  <div class="review-form-stars" id="review-form-stars">
+                    <span class="review-star" data-star="1">★</span>
+                    <span class="review-star" data-star="2">★</span>
+                    <span class="review-star" data-star="3">★</span>
+                    <span class="review-star" data-star="4">★</span>
+                    <span class="review-star" data-star="5">★</span>
+                  </div>
+                  <textarea id="review-form-text" class="review-form-textarea" placeholder="Conte sua experiência com este produto..." rows="3" required></textarea>
+                  <button type="submit" class="btn btn-primary review-form-submit" id="review-form-submit">Enviar Avaliação</button>
+                  <p class="review-form-msg" id="review-form-msg"></p>
+                </form>
+              </div>
             </div>
           </div><!-- /pm-info-scroll -->
         </div><!-- /product-modal-info -->
@@ -180,6 +200,8 @@
     </div><!-- /product-modal-content -->
   </div><!-- /product-modal -->
 
+  <div class="cart-drawer" id="cart-drawer">
+    <div class="cart-drawer-overlay" id="cart-drawer-overlay"></div>
     <div class="cart-drawer-panel">
       <div class="cart-drawer-header">
         <h3>Seu Carrinho</h3>
@@ -782,7 +804,9 @@
       <div>
         <h4 class="footer-heading">Pagamento</h4>
         <div class="footer-badges">
-          <div class="footer-badge"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Pix com Desconto</div>
+          <div class="footer-badge"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Pix</div>
+          <div class="footer-badge"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg> Crédito</div>
+          <div class="footer-badge"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg> Débito</div>
           <div class="footer-badge"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg> SSL Seguro</div>
         </div>
       </div>
@@ -1474,23 +1498,25 @@
       <div class="em-bar__left">
         <span class="em-badge">
           <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-          MODO EDIÇÃO
+          <span class="em-badge-text">MODO EDIÇÃO</span>
         </span>
-        <span class="em-hint">Clique em "Editar" nas seções</span>
       </div>
       <div class="em-bar__right">
-        <button class="em-btn em-btn--global" id="em-global-btn">
-          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
-          Config. Global
+        <button class="em-btn em-btn--global" id="em-global-btn" title="Configurações Globais">
+          <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span class="em-btn-label">Global</span>
         </button>
         <button class="em-btn em-btn--reset" id="em-reset" title="Resetar todas as edições ao padrão">
-          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg>
-          Resetar
+          <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg>
+          <span class="em-btn-label">Resetar</span>
         </button>
-        <button class="em-btn em-btn--cancel" id="em-cancel">Cancelar</button>
-        <button class="em-btn em-btn--save" id="em-save">
-          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-          Salvar Tudo
+        <button class="em-btn em-btn--cancel" id="em-cancel" title="Cancelar edições">
+          <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          <span class="em-btn-label">Cancelar</span>
+        </button>
+        <button class="em-btn em-btn--save" id="em-save" title="Salvar todas as edições">
+          <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          <span class="em-btn-label">Salvar</span>
         </button>
       </div>
     </div>

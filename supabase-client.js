@@ -515,6 +515,30 @@ class SupabaseClient {
     return result[0] || result;
   }
 
+  // ============================================
+  // REVIEWS METHODS
+  // ============================================
+
+  async getProductReviews(productId) {
+    return await this.request('GET', 'reviews', {
+      query: `?product_id=eq.${productId}&order=created_at.desc`
+    });
+  }
+
+  async getAllReviews() {
+    return await this.request('GET', 'reviews', {
+      query: '?order=created_at.desc'
+    });
+  }
+
+  async createReview(review) {
+    const result = await this.request('POST', 'reviews', {
+      body: review,
+      useAuth: true
+    });
+    return result[0] || result;
+  }
+
   async checkAdmin(email) {
     try {
       const result = await this.request('GET', 'admin_users', {
@@ -524,6 +548,47 @@ class SupabaseClient {
     } catch (e) {
       return false;
     }
+  }
+
+  // ============================================
+  // OFFERS METHODS
+  // ============================================
+
+  async getOffers() {
+    return await this.request('GET', 'offers', {
+      query: '?order=sort_order.asc,created_at.desc'
+    });
+  }
+
+  async getActiveOffers() {
+    return await this.request('GET', 'offers', {
+      query: '?active=eq.true&order=sort_order.asc,created_at.desc'
+    });
+  }
+
+  async createOffer(data) {
+    const result = await this.request('POST', 'offers', {
+      body: data,
+      useAuth: true
+    });
+    return result[0] || result;
+  }
+
+  async updateOffer(id, data) {
+    const result = await this.request('PATCH', 'offers', {
+      query: `?id=eq.${id}`,
+      body: data,
+      useAuth: true
+    });
+    return result[0] || result;
+  }
+
+  async deleteOffer(id) {
+    await this.request('DELETE', 'offers', {
+      query: `?id=eq.${id}`,
+      useAuth: true
+    });
+    return true;
   }
 
   async uploadImage(file) {
