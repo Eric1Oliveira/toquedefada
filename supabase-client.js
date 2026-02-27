@@ -211,13 +211,44 @@ class SupabaseClient {
   async subscribeNewsletter(email) {
     try {
       const result = await this.request('POST', 'newsletter_subscribers', {
-        body: { email, subscribed_at: new Date().toISOString() }
+        body: { email }
       });
       return result[0] || result;
     } catch (error) {
       console.error('Error subscribing to newsletter:', error);
       return null;
     }
+  }
+
+  // CONTACT MESSAGES
+  async createContactMessage(data) {
+    try {
+      const result = await this.request('POST', 'contact_messages', {
+        body: {
+          name: data.name,
+          email: data.email,
+          subject: data.subject || '',
+          message: data.message,
+          created_at: new Date().toISOString()
+        }
+      });
+      return result[0] || result;
+    } catch (error) {
+      console.error('Error creating contact message:', error);
+      return null;
+    }
+  }
+
+  async getContactMessages() {
+    return await this.request('GET', 'contact_messages', {
+      query: '?order=created_at.desc'
+    });
+  }
+
+  async getNewsletterSubscribers() {
+    return await this.request('GET', 'newsletter_subscribers', {
+      query: '?order=created_at.desc'
+    });
   }
 
   // ============================================

@@ -403,8 +403,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const track = document.getElementById('offers-carousel-track');
     if (!track || !offers.length) return;
 
-    // Build carousel cards - triplicate for infinite scroll (5x for single item to fill width)
-    const repeatCount = offers.length === 1 ? 5 : 3;
+    // Build carousel cards - triplicate for infinite scroll (3x for single item)
+    const repeatCount = offers.length === 1 ? 3 : 3;
     let items = [];
     for (let r = 0; r < repeatCount; r++) items = items.concat(offers);
     track.dataset.repeatCount = repeatCount;
@@ -455,11 +455,23 @@ document.addEventListener('DOMContentLoaded', () => {
   let offersAnimFrame = null;
   let offersScrollPaused = false;
   let offersOffset = 0;
+  let offersSectionVisible = false; // IntersectionObserver flag
 
   function initOffersAutoScroll() {
     const track = document.getElementById('offers-carousel-track');
     if (!track || !track.children.length) return;
     if (offersAnimFrame) cancelAnimationFrame(offersAnimFrame);
+
+    // Only run animations when section is visible in viewport
+    const offerSection = document.getElementById('ofertas');
+    if (offerSection && 'IntersectionObserver' in window) {
+      const visObs = new IntersectionObserver((entries) => {
+        offersSectionVisible = entries[0].isIntersecting;
+      }, { rootMargin: '200px' });
+      visObs.observe(offerSection);
+    } else {
+      offersSectionVisible = true; // fallback: always run
+    }
 
     const repeatCount = parseInt(track.dataset.repeatCount) || 3;
     const totalWidth = track.scrollWidth;
@@ -485,10 +497,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let resumeAutoTimeout = null;
     let isCoasting = false;          // momentum phase after release
+    let lastInteraction = 0;         // timestamp of last user interaction
+    const AUTO_RESUME_MS = 4000;     // always resume auto-scroll after this idle time
 
     function wrapOffset() {
       while (offersOffset < 0) offersOffset += oneSetWidth;
       while (offersOffset >= oneSetWidth) offersOffset -= oneSetWidth;
+    }
+
+    function markInteraction() {
+      lastInteraction = performance.now();
     }
 
     // Compute velocity from drag history using weighted average
@@ -511,14 +529,25 @@ document.addEventListener('DOMContentLoaded', () => {
       return (first.x - last.x) / dt * 16; // px per frame
     }
 
-    // Main render loop — always running, silky smooth
+    // Main render loop — only runs when section is visible
     let lastFrameTime = 0;
     function step(timestamp) {
+      // Skip heavy computation when section is offscreen
+      if (!offersSectionVisible && !isDragging) {
+        lastFrameTime = 0;
+        offersAnimFrame = requestAnimationFrame(step);
+        return;
+      }
       if (!lastFrameTime) lastFrameTime = timestamp;
       const elapsed = timestamp - lastFrameTime;
       lastFrameTime = timestamp;
       // Normalize to ~16ms frames for consistent physics
       const timeFactor = Math.min(elapsed / 16, 3);
+
+      // Failsafe: if paused too long without interaction, force resume
+      if (offersScrollPaused && !isDragging && !isCoasting && lastInteraction > 0 && (timestamp - lastInteraction > AUTO_RESUME_MS)) {
+        offersScrollPaused = false;
+      }
 
       if (!isDragging) {
         if (isCoasting) {
@@ -529,6 +558,8 @@ document.addEventListener('DOMContentLoaded', () => {
           if (Math.abs(currentVelocity) < MIN_VELOCITY) {
             isCoasting = false;
             currentVelocity = 0;
+            // Seamlessly transition to auto-scroll instead of stopping
+            offersScrollPaused = false;
           }
         } else if (!offersScrollPaused) {
           // Smoothly ease back to auto-scroll speed
@@ -555,6 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dragStartOffset = offersOffset;
       dragHistory.length = 0;
       dragHistory.push({ x: clientX, t: performance.now() });
+      markInteraction();
       if (resumeAutoTimeout) { clearTimeout(resumeAutoTimeout); resumeAutoTimeout = null; }
       track.style.cursor = 'grabbing';
     }
@@ -612,15 +644,23 @@ document.addEventListener('DOMContentLoaded', () => {
     track.addEventListener('touchend', () => { onDragEnd(); });
     track.addEventListener('touchcancel', () => { onDragEnd(); });
 
-    // Pause on hover (desktop, no drag)
+    // Pause on hover (desktop only — skip on touch devices to avoid stuck pause)
+    let hoverResumeTimeout = null;
     track.addEventListener('mouseenter', () => {
       if (!isDragging && !isCoasting) {
         offersScrollPaused = true;
+        markInteraction();
+        // Safety: auto-resume even without mouseleave (fixes mobile ghost hover)
+        if (hoverResumeTimeout) clearTimeout(hoverResumeTimeout);
+        hoverResumeTimeout = setTimeout(() => {
+          if (!isDragging) offersScrollPaused = false;
+        }, AUTO_RESUME_MS);
       }
     });
     track.addEventListener('mouseleave', () => {
       if (!isDragging) {
         offersScrollPaused = false;
+        if (hoverResumeTimeout) { clearTimeout(hoverResumeTimeout); hoverResumeTimeout = null; }
       }
     });
 
@@ -815,6 +855,26 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // Apply social links to footer
+    const social = settings.social;
+    if (social) {
+      const igLink = document.getElementById('footer-social-instagram');
+      const fbLink = document.getElementById('footer-social-facebook');
+      const tkLink = document.getElementById('footer-social-tiktok');
+      if (igLink) {
+        if (social.instagram) { igLink.href = social.instagram; igLink.style.display = ''; }
+        else igLink.style.display = 'none';
+      }
+      if (fbLink) {
+        if (social.facebook) { fbLink.href = social.facebook; fbLink.style.display = ''; }
+        else fbLink.style.display = 'none';
+      }
+      if (tkLink) {
+        if (social.tiktok) { tkLink.href = social.tiktok; tkLink.style.display = ''; }
+        else tkLink.style.display = 'none';
+      }
+    }
+
     // Apply promo banner
     const promoBanner = settings.promo_banner;
     if (promoBanner) {
@@ -1003,6 +1063,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Apply special offers carousel — loaded separately from offers table
     loadOffersCarousel();
+
+    // Apply shipping settings from admin
+    if (settings.shipping && typeof window._applyShippingSettings === 'function') {
+      window._applyShippingSettings(settings.shipping);
+    }
 
     // Apply inline edit mode changes (saved via WYSIWYG editor)
     if (typeof window._applyEditModeFromSettings === 'function') {
@@ -2227,15 +2292,180 @@ document.addEventListener('DOMContentLoaded', () => {
       if (discountRow) discountRow.style.display = 'none';
     }
 
-    const total = subtotal - discount;
+    // Shipping cost
+    const shippingCost = window.selectedShippingCost || 0;
+    const shippingRow = document.getElementById('cart-shipping-row');
+    const shippingValEl = document.getElementById('cart-shipping-value');
+    if (shippingCost > 0) {
+      if (shippingRow) shippingRow.style.display = '';
+      if (shippingValEl) shippingValEl.textContent = `R$ ${shippingCost.toFixed(2).replace('.', ',')}`;
+    } else if (shippingCost === 0 && window.selectedShippingCost !== undefined) {
+      if (shippingRow) shippingRow.style.display = '';
+      if (shippingValEl) { shippingValEl.textContent = 'Grátis'; shippingValEl.style.color = '#059669'; }
+    } else {
+      if (shippingRow) shippingRow.style.display = 'none';
+    }
+
+    const total = subtotal - discount + shippingCost;
     const totalEl = document.getElementById('cart-total');
     if (totalEl) totalEl.textContent = `R$ ${total.toFixed(2).replace('.', ',')}`;
 
-    // Enable/disable checkout button based on items
+    // Enable/disable checkout button based on items only (shipping checked on click)
     const checkoutBtn = document.getElementById('cart-checkout-infinitepay');
     if (checkoutBtn) {
       checkoutBtn.disabled = items.length === 0;
     }
+  }
+
+  // ============================================
+  // SHIPPING / FRETE CALCULATOR
+  // ============================================
+  // Defaults — overridden by admin panel settings from Supabase
+  const SHIPPING_REGION_DEFS = [
+    { id: 'sp_capital',  name: 'SP Capital',  cepMin: 1000000,  cepMax: 9999999,   pacPrice: 12.90, pacDays: '2-4',  sedexPrice: 19.90, sedexDays: '1-2' },
+    { id: 'sp_interior', name: 'SP Interior', cepMin: 10000000, cepMax: 19999999,  pacPrice: 16.90, pacDays: '3-5',  sedexPrice: 24.90, sedexDays: '2-3' },
+    { id: 'rj_es',       name: 'RJ/ES',       cepMin: 20000000, cepMax: 29999999,  pacPrice: 18.90, pacDays: '4-6',  sedexPrice: 28.90, sedexDays: '2-3' },
+    { id: 'mg',          name: 'MG',          cepMin: 30000000, cepMax: 39999999,  pacPrice: 18.90, pacDays: '4-6',  sedexPrice: 27.90, sedexDays: '2-4' },
+    { id: 'nordeste',    name: 'Nordeste',    cepMin: 40000000, cepMax: 65999999,  pacPrice: 24.90, pacDays: '6-10', sedexPrice: 35.90, sedexDays: '3-5' },
+    { id: 'norte',       name: 'Norte',       cepMin: 66000000, cepMax: 79999999,  pacPrice: 28.90, pacDays: '8-12', sedexPrice: 39.90, sedexDays: '4-6' },
+    { id: 'sul',         name: 'Sul',         cepMin: 80000000, cepMax: 99999999,  pacPrice: 19.90, pacDays: '4-6',  sedexPrice: 28.90, sedexDays: '2-3' },
+  ];
+
+  const SHIPPING_CONFIG = {
+    originCep: '09951273',
+    freeShippingMin: 199,
+    freeShippingActive: true,
+    regions: SHIPPING_REGION_DEFS.map(r => ({
+      ...r,
+      match: (cep) => cep >= r.cepMin && cep <= r.cepMax,
+      pac: { price: r.pacPrice, days: r.pacDays },
+      sedex: { price: r.sedexPrice, days: r.sedexDays }
+    }))
+  };
+
+  // Apply shipping settings from Supabase (called by applySiteSettings)
+  window._applyShippingSettings = function(shippingData) {
+    if (!shippingData) return;
+    if (shippingData.originCep) SHIPPING_CONFIG.originCep = shippingData.originCep;
+    if (shippingData.freeShippingMin !== undefined) SHIPPING_CONFIG.freeShippingMin = parseFloat(shippingData.freeShippingMin) || 0;
+    if (shippingData.freeShippingActive !== undefined) SHIPPING_CONFIG.freeShippingActive = !!shippingData.freeShippingActive;
+    if (Array.isArray(shippingData.regions)) {
+      SHIPPING_CONFIG.regions = shippingData.regions.map(r => {
+        const def = SHIPPING_REGION_DEFS.find(d => d.id === r.id) || {};
+        const merged = { ...def, ...r };
+        return {
+          ...merged,
+          match: (cep) => cep >= merged.cepMin && cep <= merged.cepMax,
+          pac: { price: parseFloat(merged.pacPrice) || 0, days: merged.pacDays || '3-7' },
+          sedex: { price: parseFloat(merged.sedexPrice) || 0, days: merged.sedexDays || '1-3' }
+        };
+      });
+    }
+  };
+
+  function getShippingOptions(cep, cartSubtotal) {
+    const cepNum = parseInt(cep.replace(/\D/g, ''));
+    if (isNaN(cepNum) || cepNum < 1000000 || cepNum > 99999999) return null;
+
+    const region = SHIPPING_CONFIG.regions.find(r => r.match(cepNum));
+    if (!region) return null;
+
+    const isFreeShipping = SHIPPING_CONFIG.freeShippingActive && cartSubtotal >= SHIPPING_CONFIG.freeShippingMin;
+
+    return [
+      {
+        id: 'pac',
+        name: 'PAC — Econômico',
+        days: region.pac.days + ' dias úteis',
+        price: isFreeShipping ? 0 : region.pac.price,
+        originalPrice: region.pac.price
+      },
+      {
+        id: 'sedex',
+        name: 'SEDEX — Expresso',
+        days: region.sedex.days + ' dias úteis',
+        price: isFreeShipping ? 0 : region.sedex.price,
+        originalPrice: region.sedex.price
+      }
+    ];
+  }
+
+  function formatCep(value) {
+    const digits = value.replace(/\D/g, '').slice(0, 8);
+    if (digits.length > 5) return digits.slice(0, 5) + '-' + digits.slice(5);
+    return digits;
+  }
+
+  // CEP input mask
+  const cepInput = document.getElementById('cart-cep-input');
+  if (cepInput) {
+    cepInput.addEventListener('input', () => {
+      cepInput.value = formatCep(cepInput.value);
+    });
+    cepInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('cart-cep-btn')?.click();
+      }
+    });
+  }
+
+  // Calculate shipping button
+  const cepBtn = document.getElementById('cart-cep-btn');
+  if (cepBtn) {
+    cepBtn.addEventListener('click', () => {
+      const cepVal = (document.getElementById('cart-cep-input')?.value || '').replace(/\D/g, '');
+      const resultsEl = document.getElementById('cart-shipping-results');
+      if (!resultsEl) return;
+
+      if (cepVal.length !== 8) {
+        resultsEl.style.display = '';
+        resultsEl.innerHTML = '<p class="shipping-error">CEP inválido. Digite 8 dígitos.</p>';
+        return;
+      }
+
+      // Calculate cart subtotal
+      const items = window.cartItems || [];
+      const subtotal = items.reduce((sum, item) => sum + (parseFloat(item.price_at_cart) || 0) * (item.quantity || 1), 0);
+
+      const options = getShippingOptions(cepVal, subtotal);
+      if (!options) {
+        resultsEl.style.display = '';
+        resultsEl.innerHTML = '<p class="shipping-error">CEP não encontrado. Verifique e tente novamente.</p>';
+        return;
+      }
+
+      resultsEl.style.display = '';
+      resultsEl.innerHTML = options.map(opt => `
+        <div class="shipping-option" data-shipping-id="${opt.id}" data-shipping-price="${opt.price}">
+          <div class="shipping-option-info">
+            <span class="shipping-option-name">${opt.name}</span>
+            <span class="shipping-option-days">${opt.days}</span>
+          </div>
+          <span class="shipping-option-price ${opt.price === 0 ? 'free' : ''}">
+            ${opt.price === 0 ? 'Grátis' : 'R$ ' + opt.price.toFixed(2).replace('.', ',')}
+          </span>
+        </div>
+      `).join('');
+
+      // Auto-select first (cheapest) option
+      const firstOption = resultsEl.querySelector('.shipping-option');
+      if (firstOption) selectShippingOption(firstOption);
+
+      // Click to change option
+      resultsEl.querySelectorAll('.shipping-option').forEach(opt => {
+        opt.addEventListener('click', () => selectShippingOption(opt));
+      });
+    });
+  }
+
+  function selectShippingOption(optEl) {
+    const resultsEl = document.getElementById('cart-shipping-results');
+    if (resultsEl) resultsEl.querySelectorAll('.shipping-option').forEach(o => o.classList.remove('selected'));
+    optEl.classList.add('selected');
+    window.selectedShippingCost = parseFloat(optEl.dataset.shippingPrice) || 0;
+    window.selectedShippingId = optEl.dataset.shippingId;
+    updateCartSummary();
   }
 
   // ---- INFINITEPAY: GERAÇÃO DE LINK VIA SUPABASE EDGE FUNCTION (sem CORS!) ----
@@ -2250,10 +2480,21 @@ document.addEventListener('DOMContentLoaded', () => {
         description: item.product_name || "Produto do Toque de Fada"
       }));
 
+      // Add shipping as a line item if applicable
+      const shippingCost = window.selectedShippingCost || 0;
+      if (shippingCost > 0) {
+        const shippingName = window.selectedShippingId === 'sedex' ? 'SEDEX' : 'PAC';
+        items.push({
+          quantity: 1,
+          price: Math.round(shippingCost * 100),
+          description: `Frete ${shippingName}`
+        });
+      }
+
       // Descrição extra para o checkout
       const fullDescription = cartItems.map(item =>
         `${item.quantity}x ${item.product_name} - R$ ${(item.price_at_cart * item.quantity).toFixed(2)}`
-      ).join('\n');
+      ).join('\n') + (shippingCost > 0 ? `\nFrete: R$ ${shippingCost.toFixed(2)}` : '');
 
       // Identificador único pro pedido
       const referenceId = orderId ? `toque-${orderId}` : `toque_${Date.now()}`;
@@ -2310,6 +2551,36 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // Require shipping selection — check multiple conditions
+    const shippingSelected = document.querySelector('.shipping-option.selected');
+    if (!shippingSelected || !window.selectedShippingId) {
+      showToast('⚠️ Informe seu CEP e selecione o frete para continuar');
+      const cepInput = document.getElementById('cart-cep-input');
+      const shippingSection = document.getElementById('cart-shipping-section');
+      // Scroll shipping section into view inside the drawer
+      if (shippingSection) shippingSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Highlight CEP input
+      if (cepInput) {
+        cepInput.focus();
+        cepInput.classList.add('cart-cep-input--error');
+        setTimeout(() => cepInput.classList.remove('cart-cep-input--error'), 3000);
+      }
+      // Show inline error message
+      let errMsg = document.getElementById('cart-shipping-error-msg');
+      if (!errMsg) {
+        errMsg = document.createElement('p');
+        errMsg.id = 'cart-shipping-error-msg';
+        errMsg.style.cssText = 'color:#DC2626;font-size:0.78rem;font-weight:600;margin-top:8px;animation:fadeIn .3s;';
+        errMsg.textContent = 'O CEP é obrigatório para calcular o frete.';
+        const resultsEl = document.getElementById('cart-shipping-results');
+        if (resultsEl) resultsEl.parentNode.insertBefore(errMsg, resultsEl.nextSibling);
+        else if (cepInput) cepInput.parentNode.parentNode.appendChild(errMsg);
+      }
+      errMsg.style.display = '';
+      setTimeout(() => { if (errMsg) errMsg.style.display = 'none'; }, 4000);
+      return;
+    }
+
     // Require login before checkout
     if (!currentUser && !(supabase && supabase.getAccessToken())) {
       showToast('Faça login para finalizar a compra');
@@ -2354,7 +2625,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         discount = Math.min(discount, subtotal);
       }
-      const total = subtotal - discount;
+
+      // Include shipping cost
+      const shippingCost = window.selectedShippingCost || 0;
+      const total = subtotal - discount + shippingCost;
 
       // Get user info
       const user = JSON.parse(localStorage.getItem('toque_user') || 'null');
@@ -2368,6 +2642,8 @@ document.addEventListener('DOMContentLoaded', () => {
         status: 'pending_payment',
         total_price: total,
         discount: discount,
+        shipping_cost: shippingCost,
+        shipping_method: window.selectedShippingId || null,
         coupon_code: appliedCoupon ? appliedCoupon.code : null
       });
 
@@ -2386,9 +2662,14 @@ document.addEventListener('DOMContentLoaded', () => {
       // Generate InfinitePay payment link
       const { checkout_url } = await createInfinitePayLink(items, total, discount, appliedCoupon?.code, orderId);
 
+      // Save checkout URL to order for retry
+      try { await supabase.updateOrder(orderId, { checkout_url: checkout_url }); } catch(e) { console.warn('Could not save checkout_url to order:', e); }
+
       // Clear cart before redirecting
       window.cartItems = [];
       appliedCoupon = null;
+      window.selectedShippingCost = undefined;
+      window.selectedShippingId = undefined;
       saveCartToLocalStorage();
       updateCartBadge();
       renderCartDrawer();
@@ -2754,31 +3035,38 @@ document.addEventListener('DOMContentLoaded', () => {
   const contactSuccess = document.getElementById('contact-success');
 
   if (contactForm) {
-    contactForm.addEventListener('submit', (e) => {
+    contactForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       
-      const name = document.getElementById('contact-name').value;
-      const email = document.getElementById('contact-email').value;
+      const name = document.getElementById('contact-name').value.trim();
+      const email = document.getElementById('contact-email').value.trim();
       const subject = document.getElementById('contact-subject').value;
-      const message = document.getElementById('contact-message').value;
+      const message = document.getElementById('contact-message').value.trim();
 
+      if (!name || !email || !message) {
+        showToast('Preencha todos os campos obrigatórios.');
+        return;
+      }
+
+      const submitBtn = contactForm.querySelector('button[type="submit"]');
+      const btnOriginal = 'ENVIAR MENSAGEM <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>';
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<svg class="mo-spinner" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/></svg> Enviando...'; }
+
+      // Save to Supabase
+      try {
+        await supabase.createContactMessage({ name, email, subject: subject || 'Geral', message });
+      } catch(err) { console.warn('Error saving contact message:', err); }
+
+      // Open WhatsApp with message
+      const whatsappNumber = window._whatsappNumber || '5511999999999';
       const whatsappMsg = encodeURIComponent(
         `Olá! Sou ${name} (${email}).\n\nAssunto: ${subject || 'Geral'}\n\n${message}\n\nEnviado pelo formulário de contato`
       );
+      window.open(`https://wa.me/${whatsappNumber}?text=${whatsappMsg}`, '_blank');
 
-      contactForm.style.display = 'none';
-      contactSuccess.style.display = 'block';
-      contactSuccess.style.animation = 'scaleIn 0.4s var(--transition-smooth)';
-
-      setTimeout(() => {
-        window.open(`https://wa.me/5511978042160?text=${whatsappMsg}`, '_blank');
-      }, 500);
-
-      setTimeout(() => {
-        contactForm.style.display = '';
-        contactSuccess.style.display = '';
-        contactForm.reset();
-      }, 5000);
+      showToast('Redirecionando para o WhatsApp...');
+      contactForm.reset();
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = btnOriginal; }
     });
   }
 
@@ -3257,10 +3545,59 @@ document.addEventListener('DOMContentLoaded', () => {
         const status = myOrdersStatusInfo(order.status);
         const total = parseFloat(order.total_price) || 0;
         const discount = parseFloat(order.discount) || 0;
+        const shippingCost = parseFloat(order.shipping_cost) || 0;
+        const shippingMethod = order.shipping_method || '';
         const items = order._items || [];
         const tracking = order.tracking_code || null;
         const noTracking = order.no_tracking === true;
         const dateStr = formatMyOrderDate(order.created_at);
+
+        // Calculate subtotal from items
+        const subtotal = items.reduce((sum, i) => sum + (i.price_at_order * (i.quantity || 1)), 0);
+
+        // Shipping method label
+        let shippingLabel = '';
+        if (shippingMethod) {
+          const methodUpper = shippingMethod.toUpperCase();
+          if (methodUpper.includes('SEDEX')) shippingLabel = 'SEDEX';
+          else if (methodUpper.includes('PAC')) shippingLabel = 'PAC';
+          else shippingLabel = shippingMethod;
+        }
+
+        // Estimate delivery date (skip for pickup/no-tracking)
+        let deliveryEstimate = '';
+        if (!noTracking && (order.status === 'shipped' || order.status === 'paid')) {
+          const shippedDate = order.updated_at ? new Date(order.updated_at) : new Date(order.created_at);
+          let minDays = 3, maxDays = 7;
+          if (shippingLabel === 'SEDEX') { minDays = 1; maxDays = 3; }
+          else if (shippingLabel === 'PAC') { minDays = 3; maxDays = 8; }
+          const estMin = new Date(shippedDate); estMin.setDate(estMin.getDate() + minDays);
+          const estMax = new Date(shippedDate); estMax.setDate(estMax.getDate() + maxDays);
+          const fmtOpts = { day: '2-digit', month: 'short' };
+          deliveryEstimate = `${estMin.toLocaleDateString('pt-BR', fmtOpts)} - ${estMax.toLocaleDateString('pt-BR', fmtOpts)}`;
+        }
+
+        // Progress steps
+        const steps = [
+          { key: 'pending', label: 'Pedido Realizado', icon: '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>' },
+          { key: 'paid', label: 'Pagamento Confirmado', icon: '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' },
+          { key: 'shipped', label: 'Enviado', icon: '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0"/></svg>' },
+          { key: 'delivered', label: 'Entregue', icon: '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>' }
+        ];
+        const statusOrder = { 'pending_payment': 0, 'pending': 0, 'paid': 1, 'shipped': 2, 'delivered': 3, 'canceled': -1 };
+        const currentStep = statusOrder[order.status] ?? -1;
+        const isCanceled = order.status === 'canceled';
+
+        const progressHtml = !isCanceled ? `<div class="mo-progress">
+          ${steps.map((s, i) => {
+            const done = i <= currentStep;
+            const active = i === currentStep;
+            return `<div class="mo-progress-step ${done ? 'mo-progress-step--done' : ''} ${active ? 'mo-progress-step--active' : ''}">
+              <div class="mo-progress-dot">${done ? s.icon : '<span class="mo-progress-num">' + (i + 1) + '</span>'}</div>
+              <span class="mo-progress-label">${s.label}</span>
+            </div>`;
+          }).join('<div class="mo-progress-line ' + '"></div>')}
+        </div>` : '';
 
         let trackingHtml = '';
         if (order.status === 'shipped' || order.status === 'delivered') {
@@ -3280,25 +3617,41 @@ document.addEventListener('DOMContentLoaded', () => {
               <div><strong>Em Tr\u00e2nsito</strong><span>Seu pedido est\u00e1 a caminho!</span></div>
             </div>`;
           }
-        } else if (order.status === 'paid') {
-          trackingHtml = `<div class="mo-tracking mo-tracking--waiting">
-            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/></svg>
-            <div><strong>Em Prepara\u00e7\u00e3o</strong><span>Seu pedido est\u00e1 sendo preparado para envio</span></div>
+        }
+
+        // Delivery info box (estimate + method) — skip for pickup/no-tracking
+        let deliveryInfoHtml = '';
+        if (!noTracking && (order.status === 'shipped' || order.status === 'paid') && (deliveryEstimate || shippingLabel)) {
+          deliveryInfoHtml = `<div class="mo-delivery-info">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <div>
+              ${shippingLabel ? `<span class="mo-delivery-method">${shippingLabel}</span>` : ''}
+              ${deliveryEstimate ? `<span class="mo-delivery-est">Previs\u00e3o: <strong>${deliveryEstimate}</strong></span>` : ''}
+            </div>
           </div>`;
-        } else if (order.status === 'pending_payment' || order.status === 'pending') {
-          trackingHtml = `<div class="mo-tracking mo-tracking--waiting">
-            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <div><strong>Rastreio</strong><span>Dispon\u00edvel ap\u00f3s confirma\u00e7\u00e3o do pagamento</span></div>
+        }
+        if (order.status === 'delivered') {
+          const deliveredDate = order.updated_at ? formatMyOrderDate(order.updated_at) : '';
+          deliveryInfoHtml = `<div class="mo-delivery-info mo-delivery-info--done">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            <div>
+              ${shippingLabel ? `<span class="mo-delivery-method">${shippingLabel}</span>` : ''}
+              <span class="mo-delivery-est">Entregue${deliveredDate ? ' em ' + deliveredDate : ''}</span>
+            </div>
           </div>`;
         }
 
-        return `<div class="mo-card">
+        return `<div class="mo-card ${isCanceled ? 'mo-card--canceled' : ''}">
           <div class="mo-card-header">
-            <div class="mo-card-id">Pedido #${order.id}</div>
+            <div>
+              <div class="mo-card-id">Pedido #${String(order.id).slice(0, 8).toUpperCase()}</div>
+              <div class="mo-card-date">${dateStr}</div>
+            </div>
             <span class="mo-status ${status.cls}">${status.icon} ${status.label}</span>
           </div>
-          <div class="mo-card-date">${dateStr}</div>
+          ${progressHtml}
           <div class="mo-card-items">
+            <div class="mo-items-title">Itens do Pedido</div>
             ${items.map(item => `<div class="mo-item">
               <span class="mo-item-name">${item.product_name}</span>
               <span class="mo-item-qty">x${item.quantity}</span>
@@ -3306,13 +3659,16 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`).join('')}
           </div>
           <div class="mo-card-footer">
-            <div class="mo-card-total">
-              ${discount > 0 ? `<small class="mo-discount">Desconto: -R$ ${discount.toFixed(2).replace('.', ',')}</small>` : ''}
-              <strong>Total: R$ ${total.toFixed(2).replace('.', ',')}</strong>
+            <div class="mo-totals">
+              <div class="mo-totals-row"><span>Subtotal (${items.reduce((s,i) => s + (i.quantity||1), 0)} ${items.reduce((s,i) => s + (i.quantity||1), 0) === 1 ? 'item' : 'itens'})</span><span>R$ ${subtotal.toFixed(2).replace('.', ',')}</span></div>
+              ${shippingCost > 0 ? `<div class="mo-totals-row"><span>Frete${shippingLabel ? ' (' + shippingLabel + ')' : ''}</span><span>R$ ${shippingCost.toFixed(2).replace('.', ',')}</span></div>` : shippingCost === 0 && total > 0 ? `<div class="mo-totals-row mo-totals-row--free"><span>Frete</span><span>Gr\u00e1tis \u2728</span></div>` : ''}
+              ${discount > 0 ? `<div class="mo-totals-row mo-totals-row--discount"><span>Desconto${order.coupon_code ? ' (' + order.coupon_code + ')' : ''}</span><span>-R$ ${discount.toFixed(2).replace('.', ',')}</span></div>` : ''}
+              <div class="mo-totals-row mo-totals-row--total"><span>Total</span><strong>R$ ${total.toFixed(2).replace('.', ',')}</strong></div>
             </div>
           </div>
+          ${deliveryInfoHtml}
           ${trackingHtml}
-          <div class="mo-status-desc">${status.desc}</div>
+          ${(order.status === 'pending_payment' || order.status === 'pending') ? `<div class="mo-pay-action"><button onclick="payOrder(${order.id})" class="mo-pay-btn" id="mo-pay-btn-${order.id}"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg> Pagar Agora</button></div>` : ''}
         </div>`;
       }).join('');
 
@@ -3322,6 +3678,63 @@ document.addEventListener('DOMContentLoaded', () => {
       myOrdersList.innerHTML = '<div class="my-orders-error"><p>Erro ao carregar pedidos. Tente novamente.</p></div>';
     }
   }
+
+  // Pay order — redirect to saved checkout_url or regenerate a new payment link
+  window.payOrder = async function(orderId) {
+    const btn = document.getElementById('mo-pay-btn-' + orderId);
+    if (btn) { btn.disabled = true; btn.innerHTML = '<svg class="mo-spinner" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/></svg> Processando...'; }
+
+    try {
+      // 1. Fetch the order to check for saved checkout_url
+      const orders = await supabase.request('GET', 'orders', { query: `?id=eq.${orderId}&select=*`, useAuth: true });
+      const order = orders && orders[0];
+      if (!order) throw new Error('Pedido não encontrado');
+
+      // 2. If checkout_url already saved, redirect directly
+      if (order.checkout_url) {
+        window.location.href = order.checkout_url;
+        return;
+      }
+
+      // 3. Otherwise, regenerate the payment link
+      const items = await supabase.getOrderItems(orderId);
+      if (!items || !items.length) throw new Error('Nenhum item encontrado no pedido');
+
+      const total = parseFloat(order.total_price) || 0;
+      const discount = parseFloat(order.discount) || 0;
+      const shippingCost = parseFloat(order.shipping_cost) || 0;
+      const shippingMethod = order.shipping_method || '';
+
+      // Build cart-like items for InfinitePay
+      const cartLikeItems = items.map(it => ({
+        quantity: it.quantity || 1,
+        price_at_cart: it.price_at_order,
+        product_name: it.product_name || 'Produto'
+      }));
+
+      // Temporarily set shipping globals so createInfinitePayLink picks them up
+      const prevShippingCost = window.selectedShippingCost;
+      const prevShippingId = window.selectedShippingId;
+      window.selectedShippingCost = shippingCost;
+      window.selectedShippingId = shippingMethod;
+
+      const { checkout_url } = await createInfinitePayLink(cartLikeItems, total, discount, order.coupon_code, orderId);
+
+      // Restore globals
+      window.selectedShippingCost = prevShippingCost;
+      window.selectedShippingId = prevShippingId;
+
+      // Save URL to order for next time
+      try { await supabase.updateOrder(orderId, { checkout_url: checkout_url }); } catch(e) { console.warn('Could not save checkout_url:', e); }
+
+      window.location.href = checkout_url;
+
+    } catch (err) {
+      console.error('Erro ao processar pagamento:', err);
+      showToast('Erro ao gerar link de pagamento. Tente novamente.');
+      if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg> Pagar Agora'; }
+    }
+  };
 
   // My wishlist
   document.getElementById('btn-my-wishlist')?.addEventListener('click', () => {
@@ -3434,7 +3847,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ---- NAVIGATION ----
-    const admPageTitles = { 'adm-dashboard': 'Dashboard', 'adm-products': 'Produtos', 'adm-categories': 'Categorias', 'adm-coupons': 'Cupons', 'adm-offers': 'Ofertas', 'adm-orders': 'Pedidos', 'adm-reports': 'Relatórios', 'adm-settings': 'Configurações' };
+    const admPageTitles = { 'adm-dashboard': 'Dashboard', 'adm-products': 'Produtos', 'adm-categories': 'Categorias', 'adm-coupons': 'Cupons', 'adm-offers': 'Ofertas', 'adm-orders': 'Pedidos', 'adm-reports': 'Relatórios', 'adm-messages': 'Newsletter', 'adm-settings': 'Configurações' };
 
     function admNavigateTo(page) {
       document.querySelectorAll('.adm-page').forEach(p => p.classList.remove('active'));
@@ -3447,6 +3860,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (page === 'adm-orders') admLoadOrders();
       if (page === 'adm-reports') admRenderReports();
       if (page === 'adm-categories') admRenderCategories();
+      if (page === 'adm-messages') admLoadMessages();
     }
 
     document.querySelectorAll('.adm-nav[data-adm-page]').forEach(btn => {
@@ -3473,13 +3887,19 @@ document.addEventListener('DOMContentLoaded', () => {
       admLoadTestimonials();
       admLoadFaq();
       admFillHeroContent();
+      // Auto-mark shipped orders as delivered after configured days
+      admAutoDeliverOrders();
     }
 
     function admUpdateDashboard() {
       document.getElementById('adm-stat-products').textContent = admProducts.length;
       document.getElementById('adm-stat-coupons').textContent = admCoupons.filter(c => c.active).length;
       document.getElementById('adm-stat-active').textContent = admProducts.filter(p => p.active !== false).length;
-      document.getElementById('adm-stat-orders').textContent = admOrders.filter(o => o.status === 'pending').length;
+      const actionNeeded = admOrders.filter(o => admNeedsAction(o.status));
+      const actionCount = actionNeeded.length;
+      document.getElementById('adm-stat-orders').textContent = actionCount;
+      // Update notification badges
+      admUpdateOrderBadges(actionNeeded);
       // Revenue stats
       const paidOrders = admOrders.filter(o => o.status === 'delivered' || o.status === 'paid');
       const totalRevenue = paidOrders.reduce((sum, o) => sum + (parseFloat(o.total_price) || 0), 0);
@@ -3494,6 +3914,39 @@ document.addEventListener('DOMContentLoaded', () => {
       // Check stock-deactivated products
       const oos = admProducts.filter(p => p.stock_deactivated);
       if (oos.length) console.log(`[Admin] ${oos.length} product(s) auto-deactivated by stock.`);
+    }
+
+    function admUpdateOrderBadges(actionNeeded) {
+      const count = actionNeeded.length;
+      // Sidebar badge
+      const navBadge = document.getElementById('adm-nav-orders-badge');
+      if (navBadge) {
+        navBadge.textContent = count > 99 ? '99+' : count;
+        navBadge.style.display = count > 0 ? '' : 'none';
+      }
+      // Quick action badge
+      const qaBadge = document.getElementById('adm-qa-orders-badge');
+      if (qaBadge) {
+        qaBadge.textContent = count > 99 ? '99+' : count;
+        qaBadge.style.display = count > 0 ? '' : 'none';
+      }
+      // Dashboard alert banner
+      const alertEl = document.getElementById('adm-orders-alert');
+      if (alertEl) {
+        if (count > 0) {
+          const pending = actionNeeded.filter(o => o.status === 'pending_payment' || o.status === 'pending').length;
+          const awaitShip = actionNeeded.filter(o => o.status === 'paid').length;
+          const shipped = actionNeeded.filter(o => o.status === 'shipped').length;
+          let details = [];
+          if (pending) details.push(`<strong>${pending}</strong> aguardando pagamento`);
+          if (awaitShip) details.push(`<strong>${awaitShip}</strong> pronto${awaitShip > 1 ? 's' : ''} para envio`);
+          if (shipped) details.push(`<strong>${shipped}</strong> em tr\u00e2nsito`);
+          alertEl.innerHTML = `<div class="adm-orders-alert__icon"><svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg></div><div class="adm-orders-alert__text"><strong>${count} pedido${count > 1 ? 's' : ''} precisa${count > 1 ? 'm' : ''} de aten\u00e7\u00e3o</strong><span>${details.join(' \u2022 ')}</span></div><button class="adm-orders-alert__btn" onclick="document.querySelector('[data-adm-page=adm-orders]').click()">Ver Pedidos</button>`;
+          alertEl.style.display = '';
+        } else {
+          alertEl.style.display = 'none';
+        }
+      }
     }
 
     // ---- CATEGORIES ----
@@ -4202,7 +4655,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Check if order needs admin action (pending payment or paid awaiting shipment)
     function admNeedsAction(status) {
-      return status === 'pending_payment' || status === 'pending' || status === 'paid';
+      return status === 'pending_payment' || status === 'pending' || status === 'paid' || status === 'shipped';
     }
 
     function admOrderStatusBadge(status) {
@@ -4252,6 +4705,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isPending = st === 'pending_payment' || st === 'pending';
         const isPaid = st === 'paid';
         const isShipped = st === 'shipped';
+        const isDelivered = st === 'delivered';
         return `<tr style="${st === 'canceled' ? 'opacity:0.5;' : ''}">
           <td><strong>#${String(o.id).slice(0, 8).toUpperCase()}</strong></td>
           <td><small>${admFormatDate(o.created_at)}</small></td>
@@ -4264,7 +4718,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ${isPending ? `<button class="adm-btn-sm" style="background:#059669;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.75rem;" data-adm-confirm-order="${o.id}">\u2713 Confirmar Pgto</button>` : ''}
             ${isPending ? `<button class="adm-btn-sm adm-btn-delete" data-adm-cancel-order="${o.id}">Cancelar</button>` : ''}
             ${isPaid ? `<button class="adm-btn-sm" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.75rem;" data-adm-deliver-order="${o.id}">\ud83d\udce6 Enviar</button>` : ''}
-            ${isShipped ? `<span style="color:#7c3aed;font-size:0.75rem;font-weight:600;">\u2708 Enviado${o.tracking_code ? ' - ' + o.tracking_code : ''}</span>` : ''}
+            ${isShipped ? `<span style="color:#7c3aed;font-size:0.75rem;font-weight:600;">\u2708 Enviado${o.tracking_code ? ' - ' + o.tracking_code : ''}</span> <button class="adm-btn-sm" style="background:#059669;color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.75rem;" data-adm-mark-delivered="${o.id}">\u2713 Entregue</button>` : ''}
+            ${isDelivered ? `<span style="color:#059669;font-size:0.75rem;font-weight:600;">\u2713 Entregue${o.tracking_code ? ' - ' + o.tracking_code : ''}</span>` : ''}
           </div></td>
         </tr>`;
       }).join('');
@@ -4317,6 +4772,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (deliverBtn) {
         const orderId = deliverBtn.dataset.admDeliverOrder;
         admOpenTrackingModal(orderId);
+        return;
+      }
+      const markDeliveredBtn = e.target.closest('[data-adm-mark-delivered]');
+      if (markDeliveredBtn) {
+        const orderId = markDeliveredBtn.dataset.admMarkDelivered;
+        if (!confirm('Marcar este pedido como entregue?')) return;
+        await admMarkDelivered(orderId);
         return;
       }
     });
@@ -4405,6 +4867,11 @@ document.addEventListener('DOMContentLoaded', () => {
           <button type="button" class="adm-btn-confirm" id="adm-order-deliver-btn" data-order-id="${order.id}" style="background:#2563eb;">\ud83d\udce6 Enviar Pedido</button>
           <button type="button" class="adm-btn-cancel" data-close-modal="adm-order-modal">Fechar</button>
         `;
+      } else if (orderSt === 'shipped') {
+        actionsHtml = `
+          <button type="button" class="adm-btn-confirm" id="adm-order-markdelivered-btn" data-order-id="${order.id}" style="background:#059669;">\u2713 Marcar como Entregue</button>
+          <button type="button" class="adm-btn-cancel" data-close-modal="adm-order-modal">Fechar</button>
+        `;
       }
       actions.innerHTML = actionsHtml;
 
@@ -4432,6 +4899,14 @@ document.addEventListener('DOMContentLoaded', () => {
           admOpenTrackingModal(deliverModalBtn.dataset.orderId);
         });
       }
+      const markDeliveredModalBtn = document.getElementById('adm-order-markdelivered-btn');
+      if (markDeliveredModalBtn) {
+        markDeliveredModalBtn.addEventListener('click', async () => {
+          if (!confirm('Marcar este pedido como entregue?')) return;
+          modal.classList.remove('open');
+          await admMarkDelivered(markDeliveredModalBtn.dataset.orderId);
+        });
+      }
       modal.classList.add('open');
     }
 
@@ -4443,6 +4918,49 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (err) {
         console.error('Error canceling order:', err);
         admNotify('Erro ao cancelar pedido: ' + (err.message || ''), 'error');
+      }
+    }
+
+    async function admMarkDelivered(orderId) {
+      try {
+        await supabase.updateOrder(orderId, { status: 'delivered' });
+        await admLoadOrders();
+        admNotify('Pedido marcado como entregue!');
+      } catch (err) {
+        console.error('Error marking order as delivered:', err);
+        admNotify('Erro ao marcar como entregue: ' + (err.message || ''), 'error');
+      }
+    }
+
+    // Auto-mark shipped orders as delivered after X days
+    async function admAutoDeliverOrders() {
+      const ship = admSettings.shipping || {};
+      const days = parseInt(ship.autoDeliverDays) || 0;
+      if (days <= 0) return; // disabled
+
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffISO = cutoff.toISOString();
+
+      const toDeliver = admOrders.filter(o =>
+        o.status === 'shipped' &&
+        o.updated_at &&
+        o.updated_at < cutoffISO
+      );
+      if (!toDeliver.length) return;
+
+      let count = 0;
+      for (const o of toDeliver) {
+        try {
+          await supabase.updateOrder(o.id, { status: 'delivered' });
+          count++;
+        } catch (err) {
+          console.error('Auto-deliver error for order', o.id, err);
+        }
+      }
+      if (count > 0) {
+        admNotify(`${count} pedido${count > 1 ? 's' : ''} marcado${count > 1 ? 's' : ''} como entregue automaticamente (após ${days} dias).`);
+        await admLoadOrders();
       }
     }
 
@@ -4541,6 +5059,9 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('adm-set-facebook').value = social.facebook || '';
       document.getElementById('adm-set-tiktok').value = social.tiktok || '';
       // Hero image and Promo banner are now managed in Edit Mode
+
+      // Fill shipping settings
+      admFillShipping();
     }
 
     document.getElementById('adm-form-contact')?.addEventListener('submit', async (e) => {
@@ -4553,6 +5074,92 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       const value = { instagram: document.getElementById('adm-set-instagram').value.trim(), facebook: document.getElementById('adm-set-facebook').value.trim(), tiktok: document.getElementById('adm-set-tiktok').value.trim() };
       try { await supabase.upsertSiteSetting('social', value); admSettings.social = value; admNotify('Redes atualizadas!'); } catch(err) { admNotify('Erro ao salvar', 'error'); }
+    });
+
+    // ---- SHIPPING SETTINGS ----
+    // Default region definitions (same order as SHIPPING_REGION_DEFS in main scope)
+    const ADM_DEFAULT_REGIONS = [
+      { id: 'sp_capital',  name: 'SP Capital',  cepMin: 1000000,  cepMax: 9999999,   pacPrice: 12.90, pacDays: '2-4',  sedexPrice: 19.90, sedexDays: '1-2' },
+      { id: 'sp_interior', name: 'SP Interior', cepMin: 10000000, cepMax: 19999999,  pacPrice: 16.90, pacDays: '3-5',  sedexPrice: 24.90, sedexDays: '2-3' },
+      { id: 'rj_es',       name: 'RJ/ES',       cepMin: 20000000, cepMax: 29999999,  pacPrice: 18.90, pacDays: '4-6',  sedexPrice: 28.90, sedexDays: '2-3' },
+      { id: 'mg',          name: 'MG',          cepMin: 30000000, cepMax: 39999999,  pacPrice: 18.90, pacDays: '4-6',  sedexPrice: 27.90, sedexDays: '2-4' },
+      { id: 'nordeste',    name: 'Nordeste',    cepMin: 40000000, cepMax: 65999999,  pacPrice: 24.90, pacDays: '6-10', sedexPrice: 35.90, sedexDays: '3-5' },
+      { id: 'norte',       name: 'Norte',       cepMin: 66000000, cepMax: 79999999,  pacPrice: 28.90, pacDays: '8-12', sedexPrice: 39.90, sedexDays: '4-6' },
+      { id: 'sul',         name: 'Sul',         cepMin: 80000000, cepMax: 99999999,  pacPrice: 19.90, pacDays: '4-6',  sedexPrice: 28.90, sedexDays: '2-3' },
+    ];
+
+    function admFillShipping() {
+      const ship = admSettings.shipping || {};
+      const cepEl = document.getElementById('adm-set-origin-cep');
+      const minEl = document.getElementById('adm-set-free-shipping-min');
+      const activeEl = document.getElementById('adm-set-free-shipping-active');
+      const autoDeliverEl = document.getElementById('adm-set-auto-deliver-days');
+      if (cepEl) cepEl.value = ship.originCep || '09951273';
+      if (minEl) minEl.value = ship.freeShippingMin !== undefined ? ship.freeShippingMin : 199;
+      if (activeEl) activeEl.checked = ship.freeShippingActive !== undefined ? !!ship.freeShippingActive : true;
+      if (autoDeliverEl) autoDeliverEl.value = ship.autoDeliverDays !== undefined ? ship.autoDeliverDays : 15;
+
+      // Render region rows
+      const container = document.getElementById('adm-shipping-regions');
+      if (!container) return;
+      const savedRegions = Array.isArray(ship.regions) ? ship.regions : [];
+      
+      container.innerHTML = ADM_DEFAULT_REGIONS.map(def => {
+        const saved = savedRegions.find(r => r.id === def.id) || {};
+        const r = { ...def, ...saved };
+        return `<div class="adm-shipping-region-row" data-region-id="${r.id}">
+          <span class="region-name">${r.name}</span>
+          <div><label>PAC (R$)</label><input type="number" step="0.01" min="0" class="adm-ship-pac-price" value="${r.pacPrice}"></div>
+          <div><label>PAC Prazo</label><input type="text" class="adm-ship-pac-days" value="${r.pacDays}" placeholder="3-5"></div>
+          <div><label>SEDEX (R$)</label><input type="number" step="0.01" min="0" class="adm-ship-sedex-price" value="${r.sedexPrice}"></div>
+          <div><label>SEDEX Prazo</label><input type="text" class="adm-ship-sedex-days" value="${r.sedexDays}" placeholder="1-2"></div>
+        </div>`;
+      }).join('');
+
+      // CEP mask in admin
+      if (cepEl) {
+        cepEl.addEventListener('input', () => {
+          const digits = cepEl.value.replace(/\D/g, '').slice(0, 8);
+          cepEl.value = digits.length > 5 ? digits.slice(0,5) + '-' + digits.slice(5) : digits;
+        });
+      }
+    }
+
+    document.getElementById('adm-form-shipping')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const originCep = (document.getElementById('adm-set-origin-cep')?.value || '').replace(/\D/g, '');
+      const freeShippingMin = parseFloat(document.getElementById('adm-set-free-shipping-min')?.value) || 0;
+      const freeShippingActive = !!document.getElementById('adm-set-free-shipping-active')?.checked;
+
+      // Collect regions from rows
+      const regionRows = document.querySelectorAll('.adm-shipping-region-row');
+      const regions = [];
+      regionRows.forEach(row => {
+        const id = row.dataset.regionId;
+        const def = ADM_DEFAULT_REGIONS.find(d => d.id === id);
+        if (!def) return;
+        regions.push({
+          id: id,
+          name: def.name,
+          cepMin: def.cepMin,
+          cepMax: def.cepMax,
+          pacPrice: parseFloat(row.querySelector('.adm-ship-pac-price')?.value) || 0,
+          pacDays: row.querySelector('.adm-ship-pac-days')?.value.trim() || '3-7',
+          sedexPrice: parseFloat(row.querySelector('.adm-ship-sedex-price')?.value) || 0,
+          sedexDays: row.querySelector('.adm-ship-sedex-days')?.value.trim() || '1-3'
+        });
+      });
+
+      const value = { originCep, freeShippingMin, freeShippingActive, regions, autoDeliverDays: parseInt(document.getElementById('adm-set-auto-deliver-days')?.value) || 0 };
+      try {
+        await supabase.upsertSiteSetting('shipping', value);
+        admSettings.shipping = value;
+        admNotify('Configurações de frete salvas!');
+        admRefreshSettings();
+      } catch (err) {
+        admNotify('Erro ao salvar frete', 'error');
+        console.error('Shipping save error:', err);
+      }
     });
 
     // Hero Image and Promo Banner admin forms removed — managed via Edit Mode
@@ -4857,6 +5464,32 @@ document.addEventListener('DOMContentLoaded', () => {
       admNotify('Pergunta excluída!');
     };
 
+    // ---- NEWSLETTER SUBSCRIBERS ----
+    async function admLoadMessages() {
+      const subList = document.getElementById('adm-subscribers-list');
+
+      // Load newsletter subscribers
+      if (subList) {
+        subList.innerHTML = '<p style="color:#999;font-size:0.85rem;">Carregando...</p>';
+        try {
+          const subs = await supabase.getNewsletterSubscribers();
+          if (!subs || !subs.length) {
+            subList.innerHTML = '<p style="color:#999;font-size:0.85rem;">Nenhum inscrito ainda.</p>';
+          } else {
+            subList.innerHTML = `<p style="font-size:0.85rem;color:var(--text-light);margin-bottom:8px;"><strong>${subs.length}</strong> inscrito${subs.length !== 1 ? 's' : ''}</p>` +
+              `<div style="overflow-x:auto;"><table class="adm-table" style="width:100%;"><thead><tr><th>Data</th><th>E-mail</th></tr></thead><tbody>${subs.map(s => {
+                const d = new Date(s.created_at);
+                const dateStr = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                return `<tr><td style="white-space:nowrap;font-size:0.8rem;">${dateStr}</td><td><a href="mailto:${s.email}" style="color:var(--primary);">${s.email}</a></td></tr>`;
+              }).join('')}</tbody></table></div>`;
+          }
+        } catch (err) {
+          console.error('Error loading newsletter subscribers:', err);
+          subList.innerHTML = '<p style="color:#e74c3c;font-size:0.85rem;">Erro ao carregar inscritos.</p>';
+        }
+      }
+    }
+
     // ---- REPORTS / SALES DASHBOARD (Redesigned) ----
     document.getElementById('adm-report-period')?.addEventListener('change', admRenderReports);
 
@@ -4877,12 +5510,12 @@ document.addEventListener('DOMContentLoaded', () => {
         ? admOrders.filter(o => new Date(o.created_at) >= startDate)
         : admOrders;
 
-      const paid = filtered.filter(o => o.status === 'delivered' || o.status === 'paid');
+      const paid = filtered.filter(o => o.status === 'delivered' || o.status === 'paid' || o.status === 'shipped');
       const totalRevenue = paid.reduce((s, o) => s + (parseFloat(o.total_price) || 0), 0);
       const avgTicket = paid.length ? totalRevenue / paid.length : 0;
       const delivered = filtered.filter(o => o.status === 'delivered').length;
       const canceled = filtered.filter(o => o.status === 'canceled').length;
-      const conversion = filtered.length ? ((delivered + paid.length) / filtered.length * 100) : 0;
+      const conversion = filtered.length > 0 ? (delivered / filtered.length * 100) : 0;
 
       // KPIs
       animateNumber('rpt-revenue', totalRevenue, true);
@@ -5039,7 +5672,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const r = 70, cx = 85, cy = 85, stroke = 28;
       const circumference = 2 * Math.PI * r;
-      let offset = circumference * 0.25; // start at 12 o'clock
+      let offset = 0;
 
       let circles = '';
       items.forEach((item) => {
@@ -5048,11 +5681,11 @@ document.addEventListener('DOMContentLoaded', () => {
         circles += `<circle cx="${cx}" cy="${cy}" r="${r}"
           fill="none" stroke="${item.color}" stroke-width="${stroke}"
           stroke-dasharray="${dashLen} ${circumference - dashLen}"
-          stroke-dashoffset="${-offset}"
+          stroke-dashoffset="${circumference * 0.25 - offset}"
           style="transform-origin:${cx}px ${cy}px">
           <title>${item.label}: ${item.display || item.value} (${(pct * 100).toFixed(0)}%)</title>
         </circle>`;
-        offset -= dashLen;
+        offset += dashLen;
       });
 
       const legend = items.map(item => {
@@ -5082,18 +5715,20 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!container) return;
 
       const statuses = [
-        { key: 'pending', label: 'Pendente', color: '#f59e0b' },
-        { key: 'paid', label: 'Pago', color: '#10b981' },
-        { key: 'delivered', label: 'Entregue', color: '#3b82f6' },
-        { key: 'canceled', label: 'Cancelado', color: '#ef4444' },
+        { keys: ['pending_payment', 'pending'], label: 'Pendente', color: '#f59e0b' },
+        { keys: ['paid'], label: 'Pago', color: '#10b981' },
+        { keys: ['shipped'], label: 'Enviado', color: '#8b5cf6' },
+        { keys: ['delivered'], label: 'Entregue', color: '#3b82f6' },
+        { keys: ['canceled'], label: 'Cancelado', color: '#ef4444' },
       ];
 
       const counts = {};
       orders.forEach(o => { counts[o.status] = (counts[o.status] || 0) + 1; });
 
       const items = statuses
-        .filter(s => counts[s.key])
-        .map(s => ({ label: s.label, value: counts[s.key], color: s.color, display: counts[s.key].toString() }));
+        .map(s => ({ label: s.label, value: s.keys.reduce((sum, k) => sum + (counts[k] || 0), 0), color: s.color }))
+        .filter(s => s.value > 0)
+        .map(s => ({ ...s, display: s.value.toString() }));
 
       renderSvgDonut(container, items, orders.length.toString(), 'pedidos');
     }
